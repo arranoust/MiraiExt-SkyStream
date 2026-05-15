@@ -19,7 +19,7 @@ SkyStream uses a repository system to fetch plugins. Follow these steps to activ
 2.  Select the **Manage Extensions** menu.
 3.  Click on the **Add Repository** button.
 4.  Enter the following Repository URL:
-    > **Repository URL:** `https://raw.githubusercontent.com/USER_NAME/REPO_NAME/main/repo.json`
+    > **Repository URL:** `https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json`
 5.  Tap **Add**.
 6.  Wait for the list to populate, then **download** the desired plugins.
 
@@ -38,7 +38,7 @@ After you have installed your plugins, you need to toggle the providers to see c
 
 To contribute to this repository or test locally:
 
-1.  **Clone the repo**: `git clone https://github.com/USER_NAME/miraiext.git`
+1.  **Clone the repo**: `git clone https://github.com/arranoust/MiraiExt-SkyStream.git`
 2.  **Install dependencies**: `npm install`
 3.  **Add/Update extractors**: `npm install skystream-extractors` (or `npm update skystream-extractors`)
 4.  **Test a plugin**: `skystream test -f loadStreams -q "https://example.com/video"`
