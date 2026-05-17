@@ -1,7 +1,7 @@
 {
   "packageName": "com.arranoust.samehadaku",
   "name": "Samehadaku",
-  "version": 3,
+  "version": 4,
   "baseUrl": "https://www.sankavollerei.com",
   "description": "Samehadaku plugin for SkyStream",
   "authors": [

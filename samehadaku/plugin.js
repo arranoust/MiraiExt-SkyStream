@@ -3,10 +3,10 @@
     // ─────────────────────────────────────────────────────────────────────────
     // CONFIG
     // ─────────────────────────────────────────────────────────────────────────
-    var MAX_RPM        = 45;          // hard cap (API limit = 50, kita pakai 45 buat buffer)
+    var MAX_RPM        = 45;
     var MIN_INTERVAL   = Math.ceil(60000 / MAX_RPM); // ~1333 ms antar request
     var CACHE_TTL      = 5 * 60000;  // 5 menit cache per URL
-    var MAX_STREAMS    = 3;          // max stream yang dikumpulkan per episode (hemat request)
+    var MAX_STREAMS    = 3;
 
     var HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -14,13 +14,13 @@
     };
 
     // ─────────────────────────────────────────────────────────────────────────
-    // RATE LIMITER — antrian serial, max MAX_RPM request/menit
+    // RATE LIMITER
     // ─────────────────────────────────────────────────────────────────────────
-    var _queue         = [];
-    var _running       = false;
-    var _lastReqTime   = 0;
-    var _reqCount      = 0;      // request dalam window 60 detik terakhir
-    var _windowStart   = Date.now();
+    var _queue       = [];
+    var _running     = false;
+    var _lastReqTime = 0;
+    var _reqCount    = 0;
+    var _windowStart = Date.now();
 
     function _resetWindowIfNeeded() {
         var now = Date.now();
@@ -38,8 +38,7 @@
         _resetWindowIfNeeded();
 
         if (_reqCount >= MAX_RPM) {
-            // Window penuh — tunda sampai window baru
-            var wait = 60000 - (Date.now() - _windowStart) + 50; // +50ms jitter
+            var wait = 60000 - (Date.now() - _windowStart) + 50;
             setTimeout(function () {
                 _running = false;
                 _queue.unshift(task);
@@ -48,9 +47,9 @@
             return;
         }
 
-        var now      = Date.now();
-        var elapsed  = now - _lastReqTime;
-        var delay    = elapsed < MIN_INTERVAL ? (MIN_INTERVAL - elapsed + Math.floor(Math.random() * 200)) : 0;
+        var now     = Date.now();
+        var elapsed = now - _lastReqTime;
+        var delay   = elapsed < MIN_INTERVAL ? (MIN_INTERVAL - elapsed + Math.floor(Math.random() * 200)) : 0;
 
         setTimeout(function () {
             _lastReqTime = Date.now();
@@ -66,12 +65,7 @@
         }, delay);
     }
 
-    /**
-     * Semua http_get harus lewat sini.
-     * Mengembalikan Promise<response>.
-     */
     function rateLimitedGet(url, hdrs) {
-        // Cek cache dulu
         var cached = _cacheGet(url);
         if (cached !== null) return Promise.resolve(cached);
 
@@ -107,7 +101,6 @@
 
     function _cachePut(url, val) {
         _cache[url] = { val: val, ts: Date.now() };
-        // Bersihkan entry lama (sederhana, max 200 entry)
         var keys = Object.keys(_cache);
         if (keys.length > 200) {
             var oldest = keys.sort(function(a, b) { return _cache[a].ts - _cache[b].ts; })[0];
@@ -135,12 +128,96 @@
         });
     }
 
-    function safeGet(url, hdrs) {
-        return rateLimitedGet(url, hdrs).catch(function () { return null; });
+    // ─────────────────────────────────────────────────────────────────────────
+    // ANILIST 
+    // ─────────────────────────────────────────────────────────────────────────
+
+    async function getAniListData(title) {
+        if (!title) return null;
+
+        var query = [
+            'query ($search: String) {',
+            '  Media(search: $search, type: ANIME) {',
+            '    idMal',
+            '    characters(sort: ROLE, perPage: 15) {',
+            '      edges {',
+            '        role',
+            '        node {',
+            '          name { full native }',
+            '          image { large medium }',
+            '        }',
+            '      }',
+            '    }',
+            '  }',
+            '}'
+        ].join(' ');
+
+        var payload = JSON.stringify({
+            query:     query,
+            variables: { search: title }
+        });
+
+        try {
+            var res = await http_post(
+                'https://graphql.anilist.co',
+                { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                payload
+            );
+            if (!res || !res.body) return null;
+            var data  = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
+            var media = data && data.data && data.data.Media;
+            if (!media) return null;
+            return {
+                idMal:      media.idMal ? String(media.idMal) : null,
+                characters: media.characters && media.characters.edges
+                    ? media.characters.edges
+                    : []
+            };
+        } catch (e) {
+            return null;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // getHome — 4 request, serial via queue → aman
+    // ANIZIP 
+    // ─────────────────────────────────────────────────────────────────────────
+
+    async function getAniZipByMalId(malId) {
+        if (!malId) return null;
+        var url = 'https://api.ani.zip/mappings?mal_id=' + malId;
+        try {
+            var res = await http_get(url, { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' });
+            if (!res || !res.body) return null;
+            var data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
+            return (data && data.episodes) ? data : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Resolver
+    // ─────────────────────────────────────────────────────────────────────────
+    
+    // Blogger
+    async function resolveBlogger(embedUrl) {
+        try {
+            var res = await rateLimitedGet(embedUrl, { "User-Agent": "Mozilla/5.0" });
+            if (!res) return null;
+            var match = res.body.match(/"play_url"\s*:\s*"([^"]+)"/)
+                     || res.body.match(/"iurl"\s*:\s*"([^"]+)"/);
+            if (!match) return null;
+            return match[1]
+                .replace(/\\u003d/g, "=")
+                .replace(/\\u0026/g, "&")
+                .replace(/\\\//g, "/");
+        } catch (_) {
+            return null;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // getHome
     // ─────────────────────────────────────────────────────────────────────────
     async function getHome(cb) {
         try {
@@ -177,7 +254,7 @@
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // search — 1 request
+    // search
     // ─────────────────────────────────────────────────────────────────────────
     async function search(query, cb) {
         try {
@@ -193,13 +270,13 @@
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // load — 1 request
+    // load 
     // ─────────────────────────────────────────────────────────────────────────
     async function load(url, cb) {
         try {
-            var base  = manifest.baseUrl;
-            var res   = await rateLimitedGet(url);
-            
+            var base = manifest.baseUrl;
+            var res  = await rateLimitedGet(url);
+
             if (!res || !res.body) {
                 cb({ success: false, error: "Respon API kosong atau bermasalah." });
                 return;
@@ -208,56 +285,123 @@
             var json  = parseJSON(res);
             var anime = json.data || {};
 
-            // FORCE TO STRING & TRIM: Paksa konversi ke primitif string untuk memutus 
-            // referensi objek async yang mungkin hilang di runtime CloudStream
             var animeTitle = "";
             if (anime.title) {
                 animeTitle = String(anime.title).trim();
             } else if (anime.name) {
                 animeTitle = String(anime.name).trim();
             }
-
-            // Jika masih kosong karena masalah parsing, ambil potongan URL akhir sebagai penyelamat
             if (!animeTitle || animeTitle === "undefined" || animeTitle === "") {
                 var urlParts = url.split('/');
-                var slug = urlParts[urlParts.length - 1] || "Anime Detail";
-                animeTitle = slug.replace(/-/g, ' ').toUpperCase();
+                var slug     = urlParts[urlParts.length - 1] || "Anime Detail";
+                animeTitle   = slug.replace(/-/g, ' ').toUpperCase();
             }
 
-            var synopsis = (anime.synopsis && anime.synopsis.paragraphs)
+            var synopsis    = (anime.synopsis && anime.synopsis.paragraphs)
                 ? anime.synopsis.paragraphs.join("\n\n")
                 : "";
-
             var animePoster = String(anime.poster || "");
             var episodeList = anime.episodeList || [];
-            
+
+            var searchTitles = [];
+            if (anime.english && String(anime.english).trim()) {
+                searchTitles.push(String(anime.english).trim());
+            }
+            if (animeTitle) searchTitles.push(animeTitle);
+            if (anime.japanese && String(anime.japanese).trim()) {
+                searchTitles.push(String(anime.japanese).trim());
+            }
+
+            var aniListData = null;
+            var aniZip      = null;
+
+            try {
+                for (var ti = 0; ti < searchTitles.length; ti++) {
+                    aniListData = await getAniListData(searchTitles[ti]);
+                    if (aniListData && aniListData.idMal) break;
+                }
+
+                if (aniListData && aniListData.idMal) {
+                    aniZip = await getAniZipByMalId(aniListData.idMal);
+                }
+            } catch (_) {
+            }
+
+            var cast = [];
+            if (aniListData && aniListData.characters.length > 0) {
+                cast = aniListData.characters.map(function (edge) {
+                    var node = edge.node;
+                    if (!node) return null;
+                    return new Actor({
+                        name:  (node.name && (node.name.full || node.name.native)) || "Unknown",
+                        role:  edge.role || "SUPPORTING",
+                        image: (node.image && (node.image.large || node.image.medium)) || ""
+                    });
+                }).filter(function (a) { return a !== null; });
+            }
+
             var episodes = episodeList.slice().reverse().map(function(ep, index) {
                 var epNum = parseFloat(ep.title) || (index + 1);
+
+                var epKeyExact = String(ep.title);
+                var epKeyFloor = String(Math.floor(epNum));
+                var aniEp = null;
+                if (aniZip && aniZip.episodes) {
+                    aniEp = aniZip.episodes[epKeyExact] || aniZip.episodes[epKeyFloor] || null;
+                }
+
+                var epName = "Episode " + ep.title;
+                if (aniEp && aniEp.title) {
+                    epName = aniEp.title.en
+                          || aniEp.title['x-jat']
+                          || aniEp.title.ja
+                          || epName;
+                }
+
+                var epPoster = animePoster;
+                if (ep.poster) epPoster = String(ep.poster);
+                if (aniEp && aniEp.image) epPoster = aniEp.image;
+
+                var epDesc    = (aniEp && aniEp.overview) ? String(aniEp.overview) : "";
+                var epRuntime = (aniEp && aniEp.runtime)  ? aniEp.runtime           : undefined;
+
                 return new Episode({
-                    name:      "Episode " + ep.title,
-                    posterUrl: ep.poster ? String(ep.poster) : animePoster,
-                    url:       base + "/anime/samehadaku/episode/" + ep.episodeId,
-                    season:    1,
-                    episode:   epNum,
-                    dubStatus: "subbed"
+                    name:        epName,
+                    posterUrl:   epPoster,
+                    url:         base + "/anime/samehadaku/episode/" + ep.episodeId,
+                    season:      1,
+                    episode:     epNum,
+                    dubStatus:   "subbed",
+                    description: epDesc,
+                    runtime:     epRuntime
                 });
             });
 
+            // Status & Score
             var rawStatus = String(anime.status || "").toLowerCase();
-            var status = rawStatus.includes("complet") || rawStatus.includes("tamat") ? "completed" : "ongoing";
+            var status    = rawStatus.includes("complet") || rawStatus.includes("tamat") ? "completed" : "ongoing";
+            var score     = parseFloat(anime.score || anime.rating || anime.voteAverage || 0) || undefined;
 
-            var score = parseFloat(anime.score || anime.rating || anime.voteAverage || 0) || undefined;
+            // Final title: prefer AniZip English title
+            var resolvedTitle = animeTitle;
+            if (aniZip && aniZip.titles) {
+                resolvedTitle = aniZip.titles.en
+                    || aniZip.titles['x-jat']
+                    || aniZip.titles.ja
+                    || animeTitle;
+            }
 
             cb({
                 success: true,
                 data: new MultimediaItem({
-                    title:       animeTitle, // <-- Menggunakan string murni yang sudah diamankan
+                    title:       resolvedTitle,
                     url:         url,
                     posterUrl:   animePoster,
                     type:        'anime',
-                    description: synopsis,
                     status:      status,
                     score:       score,
+                    description: synopsis,
+                    cast:        cast,
                     episodes:    episodes
                 })
             });
@@ -267,13 +411,12 @@
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // loadStreams — Dioptimasi Khusus untuk Blogger, Wibufile, & Pixeldrain
-    // Sangat Stabil, Anti-Stuck, & Aman dari Limitasi 50 RPM
+    // loadStreams
     // ─────────────────────────────────────────────────────────────────────────
     async function loadStreams(url, cb) {
         try {
             var base    = manifest.baseUrl;
-            var res     = await rateLimitedGet(url); // Request ke-1 (Halaman episode)
+            var res     = await rateLimitedGet(url);
             var json    = parseJSON(res);
             var epData  = json.data || {};
             var streams = [];
@@ -284,9 +427,9 @@
 
             outerServer:
             for (var qi = 0; qi < serverQualities.length; qi++) {
-                var q = serverQualities[qi];
+                var q      = serverQualities[qi];
                 var qTitle = String(q.title || "").toLowerCase();
-                
+
                 if (!q.title || qTitle === "unknown") continue;
 
                 var srvList = q.serverList || [];
@@ -297,7 +440,7 @@
 
                     try {
                         var srvUrl  = base + "/anime" + srv.href;
-                        var srvRes  = await rateLimitedGet(srvUrl); // Ambil URL stream (Ikut antrean aman)
+                        var srvRes  = await rateLimitedGet(srvUrl);
                         if (!srvRes) continue;
 
                         var srvJson = parseJSON(srvRes);
@@ -307,55 +450,48 @@
                         var serverName = String(srv.title || "").toLowerCase();
                         var isValidSource = false;
 
-                        // ── 1. JALUR OPTIMASI: BLOGGER ──
+                        // ── 1. BLOGGER ──
                         if (streamUrl.indexOf("blogger.com/video") !== -1 || serverName.includes("blogger") || serverName.includes("blogpost")) {
                             var resolvedBlogger = await resolveBlogger(streamUrl);
                             if (resolvedBlogger) {
-                                streamUrl = resolvedBlogger;
+                                streamUrl     = resolvedBlogger;
                                 isValidSource = true;
                             }
                         }
-                        
-                        // ── 2. JALUR OPTIMASI: PIXELDRAIN (Instant Rewrite) ──
+
+                        // ── 2. PIXELDRAIN ──
                         else if (streamUrl.indexOf("pixeldrain.com/u/") !== -1 || serverName.includes("pixeldrain")) {
-                            streamUrl = streamUrl.replace("pixeldrain.com/u/", "pixeldrain.com/api/file/");
+                            streamUrl     = streamUrl.replace("pixeldrain.com/u/", "pixeldrain.com/api/file/");
                             isValidSource = true;
                         }
 
-                        // ── 3. JALUR OPTIMASI: WIBUFILE (Direct Link .mp4) ──
+                        // ── 3. WIBUFILE ──
                         else if (streamUrl.indexOf("wibufile.com") !== -1 || serverName.includes("wibufile")) {
-                            // Wibufile biasanya langsung mengembalikan direct link murni (.mp4)
                             if (streamUrl.indexOf("http") !== -1) {
                                 isValidSource = true;
                             }
                         }
 
-                        // Jika lolos dari salah satu 3 pilar server di atas, bungkus ke StreamResult
                         if (isValidSource) {
                             streams.push(new StreamResult({
                                 url:     streamUrl,
-                                source:  String(srv.title || "Server") + " - " + q.title,
-                                headers: { 
-                                    "Referer": "https://v2.samehadaku.how/",
+                                source:  String(srv.title || "Server") 
+                                headers: {
+                                    "Referer":    "https://v2.samehadaku.how/",
                                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
                                 }
                             }));
-
-                            // Early Exit: Jika kualitas ini (misal 720p) sudah dapat 1 server valid, 
-                            // langsung lompat ke kualitas berikutnya demi hemat kuota RPM!
                             break;
                         }
 
                     } catch (_) {
-                        continue; // Lewati server yang error, coba alternatif lainnya
+                        continue;
                     }
                 }
 
-                // Jika total stream yang dikumpulkan sudah mencukupi target maksimal, hentikan pencarian
                 if (streams.length >= MAX_STREAMS) break outerServer;
             }
 
-            // Validasi hasil akhir
             if (streams.length === 0) {
                 cb({ success: false, error: "Tidak ada stream dari Blogger/Wibufile/Pixeldrain yang siap putar." });
                 return;
@@ -364,25 +500,6 @@
             cb({ success: true, data: streams });
         } catch (e) {
             cb({ success: false, error: String(e) });
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // resolveBlogger — 1 extra request, lewat queue juga
-    // ─────────────────────────────────────────────────────────────────────────
-    async function resolveBlogger(embedUrl) {
-        try {
-            var res = await rateLimitedGet(embedUrl, { "User-Agent": "Mozilla/5.0" });
-            if (!res) return null;
-            var match = res.body.match(/"play_url"\s*:\s*"([^"]+)"/)
-                     || res.body.match(/"iurl"\s*:\s*"([^"]+)"/);
-            if (!match) return null;
-            return match[1]
-                .replace(/\\u003d/g, "=")
-                .replace(/\\u0026/g, "&")
-                .replace(/\\\//g, "/");
-        } catch (_) {
-            return null;
         }
     }
 
