@@ -1,9 +1,9 @@
 {
   "packageName": "com.arranoust.otakudesu",
   "name": "OtakuDesu",
-  "version": 3,
-  "baseUrl": "https://www.sankavollerei.com",
-  "description": "OtakuDesu plugin for SkyStream",
+  "version": 4,
+  "baseUrl": "https://otakudesu.blog",
+  "description": "OtakuDesu Scraping Plugin untuk SkyStream Gen 2",
   "authors": [
     "arranoust"
   ],
