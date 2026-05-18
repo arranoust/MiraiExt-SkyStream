@@ -1,0 +1,53 @@
+[
+  {
+    "packageName": "com.arranoust.anizone",
+    "name": "AniZone",
+    "version": 1,
+    "baseUrl": "https://anizone.to",
+    "description": "AniZone plugin for SkyStream",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "en"
+    ],
+    "categories": [
+      "Anime"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/build/com.arranoust.anizone.sky"
+  },
+  {
+    "packageName": "com.arranoust.otakudesu",
+    "name": "OtakuDesu",
+    "version": 4,
+    "baseUrl": "https://otakudesu.blog",
+    "description": "OtakuDesu Scraping Plugin untuk SkyStream Gen 2",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "id"
+    ],
+    "categories": [
+      "Anime"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/build/com.arranoust.otakudesu.sky"
+  },
+  {
+    "packageName": "com.arranoust.samehadaku",
+    "name": "Samehadaku",
+    "version": 4,
+    "baseUrl": "https://www.sankavollerei.com",
+    "description": "Samehadaku plugin for SkyStream",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "id"
+    ],
+    "categories": [
+      "Anime"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/build/com.arranoust.samehadaku.sky"
+  }
+]
