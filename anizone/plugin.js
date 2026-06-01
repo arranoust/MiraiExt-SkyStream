@@ -33,6 +33,51 @@
         } catch (_) { return []; }
     }
 
+    // ─── Regex-based HTML parser  ─────────────
+    function parseLatestEpisodes(html) {
+        var items = [];
+        var liRegex = /<li[^>]*x-data[^>]*>[\s\S]*?<\/li>/gi;
+        var liBlocks = html.match(liRegex) || [];
+
+        for (var i = 0; i < liBlocks.length; i++) {
+            var li = liBlocks[i];
+
+            // Episode link
+            var epMatch = li.match(/href="(https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/\d+)"/i);
+            if (!epMatch) continue;
+            var epUrl = epMatch[1];
+
+            // Thumbnail
+            var thumbMatch = li.match(/(?<!:)src="(https?:\/\/[^"]+snapshot\.webp)"/i)
+                          || li.match(/(?<!:)src="(https?:\/\/[^"]+\.webp)"/i);
+            var thumbnail = thumbMatch ? thumbMatch[1] : '';
+
+            // Anime title
+            var animeTitleMatch = li.match(/href="https?:\/\/anizone\.to\/anime\/[a-z0-9]+"[^>]*title="([^"]+)"/i)
+                               || li.match(/class="title[^"]*"[^>]*>([^<]+)<\/a>/i);
+            var animeTitle = animeTitleMatch ? animeTitleMatch[1].trim() : '';
+
+            // Episode title
+            var epTitleMatch = li.match(/href="https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/\d+"[^>]*title="([^"]+)"/i);
+            var epTitle = epTitleMatch ? epTitleMatch[1].trim() : '';
+
+            // Anime page URL
+            var animeUrlMatch = epUrl.match(/^(https?:\/\/anizone\.to\/anime\/[a-z0-9]+)\/\d+$/i);
+            var animeUrl = animeUrlMatch ? animeUrlMatch[1] : '';
+
+            if (!animeTitle || !epUrl) continue;
+
+            items.push({
+                animeTitle: animeTitle,
+                animeUrl:   animeUrl,
+                epUrl:      epUrl,
+                epTitle:    epTitle,
+                thumbnail:  thumbnail
+            });
+        }
+        return items;
+    }
+
     // ─── Core Methods ─────────────────────────────────────────────────────────
 
     // Home
@@ -42,17 +87,30 @@
             var html = getBody(await http_get(base, HTML_HEADERS));
             if (!html) return cb({ success: false, error: 'Gagal memuat HTML.' });
 
+            // ── 1. Latest Episodes ──
+            var epItems = parseLatestEpisodes(html);
+            var latestEpisodes = epItems.map(function(ep) {
+                return new MultimediaItem({
+                    title:       ep.animeTitle + (ep.epTitle ? ' - ' + ep.epTitle : ''),
+                    url:         ep.epUrl,
+                    posterUrl:   ep.thumbnail,
+                    bannerUrl:   ep.thumbnail,
+                    type:        'anime',
+                    description: 'No description available.'
+                });
+            });
+
+            // ── 2. Latest Anime ──
             var links   = await parseHtml(html, '.swiper-wrapper .swiper-slide .line-clamp-2 a', 'href');
             var titles  = await parseHtml(html, '.swiper-wrapper .swiper-slide .line-clamp-2 a', 'text');
             var posters = await parseHtml(html, '.swiper-wrapper .swiper-slide img', 'src');
 
-            var animeItems = [];
+            var latestAnime = [];
             var totalItems = Math.min(links.length, titles.length, posters.length);
-
             for (var i = 0; i < totalItems; i++) {
                 var href = links[i];
                 if (!href) continue;
-                animeItems.push(new MultimediaItem({
+                latestAnime.push(new MultimediaItem({
                     title:     (titles[i] || 'No Title').trim(),
                     url:       href.startsWith('http') ? href : base + href,
                     posterUrl: posters[i] || '',
@@ -61,7 +119,9 @@
             }
 
             var result = {};
-            if (animeItems.length > 0) result['Latest Anime'] = animeItems;
+            if (latestEpisodes.length > 0) result['Latest Episodes'] = latestEpisodes;
+            if (latestAnime.length > 0)    result['Latest Anime']    = latestAnime;
+
             cb({ success: true, data: result });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -85,6 +145,7 @@
             for (var i = 0; i < totalItems; i++) {
                 var href = urls[i];
                 if (!href) continue;
+                if (/\/anime\/[a-z0-9]+\/\d+$/i.test(href)) continue;
                 results.push(new MultimediaItem({
                     title:     (titles[i] || 'No Title').trim(),
                     url:       href.startsWith('http') ? href : base + href,
@@ -95,16 +156,18 @@
 
             cb({ success: true, data: results });
         } catch (e) {
-            console.error('Error saat melakukan search:', e);
             cb({ success: false, error: String(e) });
         }
     }
 
-    // Load (detail anime + daftar episode)
+    // Load 
     async function load(url, cb) {
         var base = manifest.baseUrl;
 
         try {
+            var animePageUrl = url.replace(/\/anime\/([a-z0-9]+)\/\d+$/i, '/anime/$1');
+            if (animePageUrl !== url) url = animePageUrl;
+
             var html = getBody(await http_get(url, HTML_HEADERS));
             if (!html) return cb({ success: false, error: 'Gagal memuat HTML detail anime.' });
 
@@ -114,39 +177,68 @@
 
             var animeTitle = titles[0] ? titles[0].trim() : 'No Title';
             var poster     = posters[0] || '';
-            var synopsis   = descriptions[0] ? descriptions[0].trim() : '';
+            var synopsis   = (descriptions[0] && descriptions[0].trim()) ? descriptions[0].trim() : 'No description available.';
             var isOngoing  = /ongoing/i.test(html);
 
-            var epUrls         = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"]', 'href');
-            var epTitles       = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"] h3', 'text');
-            var epDescriptions = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"] span.text-slate-100.text-sm', 'text');
-            var epAirDates     = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"] .flex-row span:nth-child(2) span.line-clamp-1', 'text');
-            var epThumbnails = await parseHtml(html, 'ul li a[wire\\:navigate][href*="/anime/"] img', 'src');
-
+            // ── Parse episodes with per-episode thumbnails ──
             var episodeItems = [];
-            var totalEpisodes = Math.min(epUrls.length, epTitles.length);
+            var liBlocks = html.match(/<li[^>]*x-data[^>]*>[\s\S]*?<\/li>/gi) || [];
 
-            for (var i = 0; i < totalEpisodes; i++) {
-                var epHref = epUrls[i];
-                if (!epHref) continue;
+            for (var li = 0; li < liBlocks.length; li++) {
+                var block = liBlocks[li];
+                var epUrlMatch = block.match(/href="(https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/(\d+))"/i);
+                if (!epUrlMatch) continue;
+                var epUrl = epUrlMatch[1];
+                var epNum = parseInt(epUrlMatch[2], 10);
 
-                var epSlug     = epHref.split('/').pop() || '';
-                var rawEpTitle = epTitles[i] || '';
-                // Ekstrak angka dari slug: "1"→1, "s1"→1, "ova2"→2, ""→i+1
-                var epNum      = parseFloat(epSlug.replace(/[^0-9.]/g, '')) || (i + 1);
+                // Episode thumbnail
+                var thumbMatch = block.match(/(?<!:)src="(https?:\/\/[^"]+snapshot\.webp)"/i)
+                              || block.match(/(?<!:)src="(https?:\/\/[^"]+\.webp)"/i);
+                var epThumb = thumbMatch ? thumbMatch[1] : poster;
+
+                // Episode title
+                var h3Match = block.match(/<h3[^>]*>\s*([^<]+?)\s*<\/h3>/i);
+                var epName  = h3Match ? h3Match[1].trim() : ('Episode ' + epNum);
+                if (!epName || epName === 'Untitled') epName = 'Episode ' + epNum;
+
+                // Air date
+                var dateMatch = block.match(/(\d{4}-\d{2}-\d{2})/);
+                var airDate   = dateMatch ? dateMatch[1] : '';
 
                 episodeItems.push(new Episode({
-                    name:        rawEpTitle.trim() || ('Episode ' + epSlug),
-                    url:         epHref.startsWith('http') ? epHref : base + epHref,
-                    season:      1,
-                    episode:     epNum,
-                    dubStatus:   'subbed',
-                    description: epDescriptions[i] ? epDescriptions[i].trim() : '',
-                    airDate:     epAirDates[i] ? epAirDates[i].trim() : '',
-                    posterUrl:   epThumbnails[i] || poster,
-                    runtime:     0
+                    name:      epName,
+                    url:       epUrl,
+                    season:    1,
+                    episode:   epNum,
+                    dubStatus: 'subbed',
+                    posterUrl: epThumb,
+                    airDate:   airDate,
+                    runtime:   0
                 }));
             }
+
+            if (episodeItems.length === 0) {
+                var epUrlRegex = /href="(https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/(\d+))"/gi;
+                var seen = {};
+                var match;
+                while ((match = epUrlRegex.exec(html)) !== null) {
+                    var epUrl = match[1];
+                    var epNum = parseInt(match[2], 10);
+                    if (seen[epUrl]) continue;
+                    seen[epUrl] = true;
+                    episodeItems.push(new Episode({
+                        name:      'Episode ' + epNum,
+                        url:       epUrl,
+                        season:    1,
+                        episode:   epNum,
+                        dubStatus: 'subbed',
+                        posterUrl: poster,
+                        runtime:   0
+                    }));
+                }
+            }
+
+            episodeItems.sort(function(a, b) { return a.episode - b.episode; });
 
             cb({
                 success: true,
@@ -162,7 +254,6 @@
             });
 
         } catch (e) {
-            console.error('Error saat melakukan load detail:', e);
             cb({ success: false, error: String(e) });
         }
     }
@@ -201,7 +292,6 @@
             cb({ success: true, data: [stream] });
 
         } catch (e) {
-            console.error('Error loadStreams:', e);
             cb({ success: false, error: String(e) });
         }
     }

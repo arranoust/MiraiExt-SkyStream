@@ -1,8 +1,11 @@
 {
   "packageName": "com.arranoust.anizone",
   "name": "AniZone",
-  "version": 1,
+  "version": 6,
   "baseUrl": "https://anizone.to",
+  "domains": [
+    { "name": "anizone.to", "url": "https://anizone.to" }
+  ],
   "description": "AniZone plugin for SkyStream",
   "authors": [
     "arranoust"
