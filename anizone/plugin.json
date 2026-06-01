@@ -1,7 +1,7 @@
 {
   "packageName": "com.arranoust.anizone",
   "name": "AniZone",
-  "version": 2,
+  "version": 3,
   "baseUrl": "https://anizone.to",
   "domains": [
     { "name": "anizone.to", "url": "https://anizone.to" }
