@@ -33,7 +33,7 @@
         } catch (_) { return []; }
     }
 
-    // ─── Regex-based HTML parser ─────────────
+    // ─── Regex-based HTML parser  ─────────────
     function parseLatestEpisodes(html) {
         var items = [];
         var liRegex = /<li[^>]*x-data[^>]*>[\s\S]*?<\/li>/gi;
@@ -61,7 +61,7 @@
             var epTitleMatch = li.match(/href="https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/\d+"[^>]*title="([^"]+)"/i);
             var epTitle = epTitleMatch ? epTitleMatch[1].trim() : '';
 
-            // Anime page URL 
+            // Anime page URL
             var animeUrlMatch = epUrl.match(/^(https?:\/\/anizone\.to\/anime\/[a-z0-9]+)\/\d+$/i);
             var animeUrl = animeUrlMatch ? animeUrlMatch[1] : '';
 
@@ -165,6 +165,9 @@
         var base = manifest.baseUrl;
 
         try {
+            var animePageUrl = url.replace(/\/anime\/([a-z0-9]+)\/\d+$/i, '/anime/$1');
+            if (animePageUrl !== url) url = animePageUrl;
+
             var html = getBody(await http_get(url, HTML_HEADERS));
             if (!html) return cb({ success: false, error: 'Gagal memuat HTML detail anime.' });
 
