@@ -34,7 +34,6 @@
     }
 
     // ─── Regex-based HTML parser ─────────────
-
     function parseLatestEpisodes(html) {
         var items = [];
         var liRegex = /<li[^>]*x-data[^>]*>[\s\S]*?<\/li>/gi;
@@ -49,8 +48,8 @@
             var epUrl = epMatch[1];
 
             // Thumbnail
-            var thumbMatch = li.match(/<img[^>]+src="([^"]+snapshot\.webp[^"]*)"/i)
-                          || li.match(/<img[^>]+src="([^"]+\.webp[^"]*)"/i);
+            var thumbMatch = li.match(/(?<!:)src="(https?:\/\/[^"]+snapshot\.webp)"/i)
+                          || li.match(/(?<!:)src="(https?:\/\/[^"]+\.webp)"/i);
             var thumbnail = thumbMatch ? thumbMatch[1] : '';
 
             // Anime title
@@ -62,7 +61,7 @@
             var epTitleMatch = li.match(/href="https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/\d+"[^>]*title="([^"]+)"/i);
             var epTitle = epTitleMatch ? epTitleMatch[1].trim() : '';
 
-            // Anime page URL (without episode number)
+            // Anime page URL 
             var animeUrlMatch = epUrl.match(/^(https?:\/\/anizone\.to\/anime\/[a-z0-9]+)\/\d+$/i);
             var animeUrl = animeUrlMatch ? animeUrlMatch[1] : '';
 
@@ -93,8 +92,9 @@
             var latestEpisodes = epItems.map(function(ep) {
                 return new MultimediaItem({
                     title:       ep.animeTitle + (ep.epTitle ? ' - ' + ep.epTitle : ''),
-                    url:         ep.animeUrl || ep.epUrl,
-                    posterUrl:   ep.thumbnail,   
+                    url:         ep.epUrl,
+                    posterUrl:   ep.thumbnail,
+                    bannerUrl:   ep.thumbnail,
                     type:        'anime',
                     description: 'No description available.'
                 });
@@ -183,18 +183,17 @@
 
             for (var li = 0; li < liBlocks.length; li++) {
                 var block = liBlocks[li];
-
                 var epUrlMatch = block.match(/href="(https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/(\d+))"/i);
                 if (!epUrlMatch) continue;
                 var epUrl = epUrlMatch[1];
                 var epNum = parseInt(epUrlMatch[2], 10);
 
                 // Episode thumbnail
-                var thumbMatch = block.match(/src="(https?:\/\/[^"]+snapshot\.webp)"/i)
-                              || block.match(/src="(https?:\/\/[^"]+\.webp)"/i);
+                var thumbMatch = block.match(/(?<!:)src="(https?:\/\/[^"]+snapshot\.webp)"/i)
+                              || block.match(/(?<!:)src="(https?:\/\/[^"]+\.webp)"/i);
                 var epThumb = thumbMatch ? thumbMatch[1] : poster;
 
-                // Episode title 
+                // Episode title
                 var h3Match = block.match(/<h3[^>]*>\s*([^<]+?)\s*<\/h3>/i);
                 var epName  = h3Match ? h3Match[1].trim() : ('Episode ' + epNum);
                 if (!epName || epName === 'Untitled') epName = 'Episode ' + epNum;
@@ -236,7 +235,6 @@
                 }
             }
 
-            // Sort episodes ascending by episode number
             episodeItems.sort(function(a, b) { return a.episode - b.episode; });
 
             cb({
