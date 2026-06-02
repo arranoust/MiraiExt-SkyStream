@@ -3,7 +3,6 @@
     // ─── Constants ────────────────────────────────────────────────────────────
     var BASE_URL   = manifest.baseUrl;
     var SERIES_URL = 'https://series.lk21.de';
-    var SEARCH_URL = 'https://gudangvape.com';
     var POSTER_CDN = 'https://static-jpg.lk21.party/wp-content/uploads/';
     var UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
     var HTML_HDR   = { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8' };
@@ -37,9 +36,17 @@
         } catch (_) { return ''; }
     }
 
+    function cleanTitle(raw) {
+        return (raw || '')
+            .replace(/^nonton\s+/i, '')
+            .replace(/\s+sub\s+indo\s+di\s+lk21\s*$/i, '')
+            .replace(/\s+di\s+lk21\s*$/i, '')
+            .replace(/\s+sub\s+indo\s*$/i, '')
+            .trim();
+    }
+
     // ─── Resolvers ────────────────────────────────────────────────────────────
 
-    // Hownetwork / cloud.hownetwork — POST ke /api.php
     async function resolveHownetwork(embedUrl) {
         try {
             var id  = embedUrl.split('id=')[1] || '';
@@ -64,30 +71,18 @@
         } catch (_) { return null; }
     }
 
-    // Filesim-based (Furher, Turbovidhls, Co4nxtrl, dll)
-    // Pattern: GET embed page → cari packed JS → unpack → ambil sources JSON
     async function resolveFilesim(embedUrl) {
         try {
             var html = getBody(await http_get(embedUrl, { ...HTML_HDR, 'Referer': getBaseUrl(embedUrl) + '/' }));
-
-            // Coba unpack P.A.C.K.E.R dulu
-            var src = html;
+            var src  = html;
             if (html.includes('eval(function(p,a,c,k,e')) {
                 try { src = getAndUnpack(html); } catch (_) {}
             }
 
-            // Cari sources array: sources:[{file:"...",label:"..."}]
-            var sourcesMatch = src.match(/sources\s*:\s*\[([^\]]+)\]/i)
-                || src.match(/file\s*:\s*["']([^"']+\.m3u8[^"']*)["']/i)
-                || src.match(/["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i);
-
-            if (!sourcesMatch) return null;
-
-            // Kalau dapat array sources
             var arr = src.match(/sources\s*:\s*\[([^\]]+)\]/i);
             if (arr) {
-                var results = [];
-                var fileMatches = arr[1].matchAll(/file\s*:\s*["']([^"']+)["'][^}]*(?:label\s*:\s*["']([^"']*)["'])?/gi);
+                var results      = [];
+                var fileMatches  = arr[1].matchAll(/file\s*:\s*["']([^"']+)["'][^}]*(?:label\s*:\s*["']([^"']*)["'])?/gi);
                 for (var m of fileMatches) {
                     if (!m[1]) continue;
                     results.push(new StreamResult({
@@ -99,7 +94,6 @@
                 if (results.length) return results;
             }
 
-            // Fallback: single file match
             var single = src.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i)
                 || src.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
             if (single && single[1]) {
@@ -114,7 +108,6 @@
         } catch (_) { return null; }
     }
 
-    // VidHide — GET embed → cari /api/server endpoint dari script
     async function resolveVidhide(embedUrl) {
         try {
             var html = getBody(await http_get(embedUrl, { ...HTML_HDR, 'Referer': BASE_URL + '/' }));
@@ -126,7 +119,6 @@
                  || src.match(/file\s*:\s*["']([^"']+\.m3u8[^"']*)["']/i);
             if (!m) return null;
 
-            // Kalau ketemu /api/server, hit lagi
             if (m[1].includes('/api/server')) {
                 var apiRes  = await http_get(m[1], { ...JSON_HDR, 'Referer': embedUrl });
                 var apiJson = JSON.parse(getBody(apiRes));
@@ -139,15 +131,12 @@
         } catch (_) { return null; }
     }
 
-    // Router utama — pilih resolver berdasarkan host
     async function resolveEmbed(embedUrl, referer) {
         if (!embedUrl) return null;
         var host = embedUrl.toLowerCase();
-
-        if (host.includes('hownetwork'))    return await resolveHownetwork(embedUrl).then(r => r ? [r] : null);
+        if (host.includes('hownetwork'))            return await resolveHownetwork(embedUrl).then(r => r ? [r] : null);
         if (host.includes('vidhide') ||
-            host.includes('vhide'))         return await resolveVidhide(embedUrl);
-        // Filesim-based: furher, turbovidhls, co4nxtrl, filesim, dll
+            host.includes('vhide'))                 return await resolveVidhide(embedUrl);
         return await resolveFilesim(embedUrl);
     }
 
@@ -187,7 +176,7 @@
         var items = [];
         for (var i = 0; i < hrefs.length; i++) {
             var href  = hrefs[i];
-            var title = (titles[i] || '').trim();
+            var title = cleanTitle((titles[i] || '').trim());
             if (!href || !title) continue;
             var fullUrl = href.startsWith('http') ? href : base + href;
             items.push(new MultimediaItem({
@@ -203,19 +192,24 @@
     // ─── search ───────────────────────────────────────────────────────────────
     async function search(query, cb) {
         try {
-            var res  = await http_get(SEARCH_URL + '/search.php?s=' + encodeURIComponent(query),
-                { ...JSON_HDR, 'Referer': BASE_URL + '/' });
-            var root = JSON.parse(getBody(res));
-            var arr  = root.data || [];
-            var items = arr.map(function(item) {
-                var type = item.type || '';
-                return new MultimediaItem({
-                    title:     item.title || '',
-                    url:       type === 'series' ? (SERIES_URL + '/' + item.slug) : (BASE_URL + '/' + item.slug),
-                    posterUrl: POSTER_CDN + (item.poster || ''),
-                    type:      type === 'series' ? 'series' : 'movie'
-                });
-            }).filter(function(i) { return i.title; });
+            var html   = getBody(await http_get(BASE_URL + '/?s=' + encodeURIComponent(query), HTML_HDR));
+            var hrefs  = await parseHtml(html, 'article figure a', 'href');
+            var imgs   = await parseHtml(html, 'article figure img', 'src');
+            var titles = await parseHtml(html, 'article figure h3', 'text');
+
+            var items = [];
+            for (var i = 0; i < hrefs.length; i++) {
+                var href  = hrefs[i];
+                var title = cleanTitle((titles[i] || '').trim());
+                if (!href || !title) continue;
+                var fullUrl = href.startsWith('http') ? href : BASE_URL + href;
+                items.push(new MultimediaItem({
+                    title:     title,
+                    url:       fullUrl,
+                    posterUrl: imgs[i] || '',
+                    type:      'series'
+                }));
+            }
 
             cb({ success: true, data: items });
         } catch (e) { cb({ success: false, error: String(e) }); }
@@ -234,12 +228,12 @@
             var html = getBody(await http_get(fixedUrl, HTML_HDR));
             var base = getBaseUrl(fixedUrl);
 
-            var titles  = await parseHtml(html, 'div.movie-info h1', 'text');
-            var title   = (titles[0] || '').trim() || 'Unknown';
-            var posters = await parseHtml(html, 'meta[property="og:image"]', 'content');
-            var poster  = posters[0] || '';
-            var descs   = await parseHtml(html, 'div.meta-info', 'text');
-            var desc    = (descs[0] || '').trim();
+            var rawTitles = await parseHtml(html, 'div.movie-info h1', 'text');
+            var title     = cleanTitle((rawTitles[0] || '').trim()) || 'Unknown';
+            var posters   = await parseHtml(html, 'meta[property="og:image"]', 'content');
+            var poster    = posters[0] || '';
+            var descs     = await parseHtml(html, 'div.meta-info', 'text');
+            var desc      = (descs[0] || '').trim();
 
             var seasonScripts = await parseHtml(html, 'script#season-data', 'html');
             var isSeries      = seasonScripts.length > 0 && seasonScripts[0];
@@ -252,13 +246,15 @@
                     for (var k = 0; k < keys.length; k++) {
                         var epArr = root[keys[k]];
                         for (var i = 0; i < epArr.length; i++) {
-                            var ep    = epArr[i];
-                            var epNum = ep.episode_no || (i + 1);
+                            var ep       = epArr[i];
+                            var epNum    = ep.episode_no || (i + 1);
+                            var epPoster = ep.thumbnail || ep.poster || ep.image || poster;
                             episodes.push(new Episode({
-                                name:    'Episode ' + epNum,
-                                url:     base + '/' + ep.slug,
-                                season:  ep.s || 1,
-                                episode: epNum
+                                name:      'Episode ' + epNum,
+                                url:       base + '/' + ep.slug,
+                                season:    ep.s || 1,
+                                episode:   epNum,
+                                posterUrl: epPoster
                             }));
                         }
                     }
@@ -270,7 +266,7 @@
             } else {
                 cb({ success: true, data: new MultimediaItem({
                     title, url, posterUrl: poster, type: 'movie', description: desc,
-                    episodes: [new Episode({ name: title, url, season: 1, episode: 1 })]
+                    episodes: [new Episode({ name: title, url, season: 1, episode: 1, posterUrl: poster })]
                 })});
             }
         } catch (e) { cb({ success: false, error: String(e) }); }
