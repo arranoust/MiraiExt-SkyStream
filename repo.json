@@ -4,6 +4,6 @@
   "description": "SkyStream plugins repository",
   "manifestVersion": 1,
   "pluginLists": [
-    "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/build/plugins.json"
+    "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/build-test/plugins.json"
   ]
 }

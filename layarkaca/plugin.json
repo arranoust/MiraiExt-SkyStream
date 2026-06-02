@@ -1,0 +1,17 @@
+{
+  "packageName": "com.arranoust.layarkaca",
+  "name": "LayarKaca",
+  "version": 1,
+  "baseUrl": "https://lk21.de",
+  "description": "LayarKaca - Film & Series Indonesia",
+  "authors": [
+    "arranoust"
+  ],
+  "languages": [
+    "id"
+  ],
+  "categories": [
+    "Movies",
+    "Series"
+  ]
+}
