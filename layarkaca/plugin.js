@@ -47,30 +47,97 @@
 
     // ─── Resolvers ────────────────────────────────────────────────────────────
 
+    // P2P — POST to cloud.hownetwork.xyz/api2.php
     async function resolveHownetwork(embedUrl) {
         try {
-            var id  = embedUrl.split('id=')[1] || '';
+            var id  = embedUrl.split('id=')[1] || embedUrl.split('/').pop() || '';
+            // playeriframe.sbs/iframe/p2p/{token} → extract token
+            var tokenMatch = embedUrl.match(/\/iframe\/p2p\/([^/?]+)/);
+            var token = tokenMatch ? tokenMatch[1] : id;
+
+            var apiUrl = 'https://cloud.hownetwork.xyz/api2.php?id=' + encodeURIComponent(token);
             var res = await http_post(
-                getBaseUrl(embedUrl) + '/api.php?id=' + id,
+                apiUrl,
                 {
                     'User-Agent':       UA,
                     'Referer':          embedUrl,
                     'X-Requested-With': 'XMLHttpRequest',
-                    'Content-Type':     'application/x-www-form-urlencoded'
+                    'Content-Type':     'application/x-www-form-urlencoded',
+                    'Origin':           'https://playeriframe.sbs'
                 },
-                'r=&d=' + encodeURIComponent(getBaseUrl(embedUrl))
+                'r=&d=https%3A%2F%2Fplayeriframe.sbs'
             );
             var json = JSON.parse(getBody(res));
-            var file = json.file || null;
+            var file = json.file || json.url || null;
             if (!file) return null;
             return new StreamResult({
                 url:     file,
                 quality: 'Multi Quality',
-                headers: { 'Referer': embedUrl }
+                source:  'P2P',
+                headers: { 'Referer': 'https://playeriframe.sbs/' }
             });
         } catch (_) { return null; }
     }
 
+    // TurboVIP — playeriframe.sbs wraps emturbovid.com/t/{id}, scrape iframe src then extract m3u8
+    async function resolveTurboVip(embedUrl) {
+        try {
+            // embedUrl = https://playeriframe.sbs/iframe/turbovip/{id}
+            var wrapHtml = getBody(await http_get(embedUrl, { ...HTML_HDR, 'Referer': BASE_URL + '/' }));
+            var iframeSrc = wrapHtml.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i)?.[1];
+            if (!iframeSrc) return null;
+
+            // iframeSrc = https://emturbovid.com/t/{id} or https://turbovidhls.com/...
+            var innerHtml = getBody(await http_get(iframeSrc, { ...HTML_HDR, 'Referer': 'https://playeriframe.sbs/' }));
+            var src = innerHtml;
+            if (innerHtml.includes('eval(function(p,a,c,k,e')) {
+                try { src = getAndUnpack(innerHtml); } catch (_) {}
+            }
+
+            var m = src.match(/["'](https?:\/\/[^"']+\.m3u8[^"']{0,300}?)["']/i)
+                 || src.match(/file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i)
+                 || src.match(/source\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i);
+            if (!m) return null;
+
+            return new StreamResult({
+                url:     m[1],
+                quality: 'Multi Quality',
+                source:  'TurboVIP',
+                headers: { 'Referer': getBaseUrl(iframeSrc) + '/', 'Origin': getBaseUrl(iframeSrc) }
+            });
+        } catch (_) { return null; }
+    }
+
+    // Cast — playeriframe.sbs wraps sb1254w9megshle.org/e/{id}, scrape m3u8
+    async function resolveCast(embedUrl) {
+        try {
+            // embedUrl = https://playeriframe.sbs/iframe/cast/{id}
+            var wrapHtml = getBody(await http_get(embedUrl, { ...HTML_HDR, 'Referer': BASE_URL + '/' }));
+            var iframeSrc = wrapHtml.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i)?.[1];
+            if (!iframeSrc) return null;
+
+            // iframeSrc = https://sb1254w9megshle.org/e/{id}
+            var innerHtml = getBody(await http_get(iframeSrc, { ...HTML_HDR, 'Referer': 'https://playeriframe.sbs/' }));
+            var src = innerHtml;
+            if (innerHtml.includes('eval(function(p,a,c,k,e')) {
+                try { src = getAndUnpack(innerHtml); } catch (_) {}
+            }
+
+            var m = src.match(/["'](https?:\/\/[^"']+\.m3u8[^"']{0,400}?)["']/i)
+                 || src.match(/file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i)
+                 || src.match(/source\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/i);
+            if (!m) return null;
+
+            return new StreamResult({
+                url:     m[1],
+                quality: 'Multi Quality',
+                source:  'Cast',
+                headers: { 'Referer': getBaseUrl(iframeSrc) + '/' }
+            });
+        } catch (_) { return null; }
+    }
+
+    // Filesim — generic packed JS resolver (kept as fallback)
     async function resolveFilesim(embedUrl) {
         try {
             var html = getBody(await http_get(embedUrl, { ...HTML_HDR, 'Referer': getBaseUrl(embedUrl) + '/' }));
@@ -81,13 +148,14 @@
 
             var arr = src.match(/sources\s*:\s*\[([^\]]+)\]/i);
             if (arr) {
-                var results      = [];
-                var fileMatches  = arr[1].matchAll(/file\s*:\s*["']([^"']+)["'][^}]*(?:label\s*:\s*["']([^"']*)["'])?/gi);
+                var results     = [];
+                var fileMatches = arr[1].matchAll(/file\s*:\s*["']([^"']+)["'][^}]*(?:label\s*:\s*["']([^"']*)["'])?/gi);
                 for (var m of fileMatches) {
                     if (!m[1]) continue;
                     results.push(new StreamResult({
                         url:     m[1],
                         quality: m[2] || 'Auto',
+                        source:  'Filesim',
                         headers: { 'Referer': embedUrl }
                     }));
                 }
@@ -100,10 +168,10 @@
                 return [new StreamResult({
                     url:     single[1],
                     quality: 'Auto',
+                    source:  'Filesim',
                     headers: { 'Referer': embedUrl }
                 })];
             }
-
             return null;
         } catch (_) { return null; }
     }
@@ -124,19 +192,42 @@
                 var apiJson = JSON.parse(getBody(apiRes));
                 var file    = apiJson.url || apiJson.file || apiJson.src;
                 if (!file) return null;
-                return [new StreamResult({ url: file, quality: 'Auto', headers: { 'Referer': embedUrl } })];
+                return [new StreamResult({ url: file, quality: 'Auto', source: 'Vidhide', headers: { 'Referer': embedUrl } })];
             }
-
-            return [new StreamResult({ url: m[1], quality: 'Auto', headers: { 'Referer': embedUrl } })];
+            return [new StreamResult({ url: m[1], quality: 'Auto', source: 'Vidhide', headers: { 'Referer': embedUrl } })];
         } catch (_) { return null; }
     }
 
-    async function resolveEmbed(embedUrl, referer) {
+    // ─── Main embed dispatcher ────────────────────────────────────────────────
+    async function resolveEmbed(embedUrl, serverName, referer) {
         if (!embedUrl) return null;
         var host = embedUrl.toLowerCase();
-        if (host.includes('hownetwork'))            return await resolveHownetwork(embedUrl).then(r => r ? [r] : null);
-        if (host.includes('vidhide') ||
-            host.includes('vhide'))                 return await resolveVidhide(embedUrl);
+
+        // Route by data-server name first (most reliable)
+        if (serverName === 'p2p' || host.includes('playeriframe.sbs/iframe/p2p')) {
+            var r = await resolveHownetwork(embedUrl);
+            return r ? [r] : null;
+        }
+        if (serverName === 'turbovip' || host.includes('playeriframe.sbs/iframe/turbovip') || host.includes('emturbovid') || host.includes('turbovidhls')) {
+            var r = await resolveTurboVip(embedUrl);
+            return r ? [r] : null;
+        }
+        if (serverName === 'cast' || host.includes('playeriframe.sbs/iframe/cast') || host.includes('sb1254w9megshle')) {
+            var r = await resolveCast(embedUrl);
+            return r ? [r] : null;
+        }
+        // Hydrax uses CF Turnstile + encrypted payload — not resolvable server-side
+        if (serverName === 'hydrax' || host.includes('playeriframe.sbs/iframe/hydrax')) {
+            return null;
+        }
+
+        if (host.includes('hownetwork')) {
+            var r = await resolveHownetwork(embedUrl);
+            return r ? [r] : null;
+        }
+        if (host.includes('vidhide') || host.includes('vhide')) {
+            return await resolveVidhide(embedUrl);
+        }
         return await resolveFilesim(embedUrl);
     }
 
@@ -294,24 +385,39 @@
     // ─── loadStreams ───────────────────────────────────────────────────────────
     async function loadStreams(url, cb) {
         try {
-            var html    = getBody(await http_get(url, HTML_HDR));
-            var players = await parseHtml(html, 'ul#player-list > li a', 'href');
+            var html = getBody(await http_get(url, HTML_HDR));
 
-            if (!players.length)
+            // Extract player links with server names from data-server attribute
+            var playerHtml = await parseHtml(html, 'ul#player-list > li a', 'html');
+            var playerHrefs      = await parseHtml(html, 'ul#player-list > li a', 'href');
+            var playerDataServer = await parseHtml(html, 'ul#player-list > li a', 'data-server');
+            var playerText       = await parseHtml(html, 'ul#player-list > li a', 'text');
+
+            if (!playerHrefs.length)
                 return cb({ success: false, error: 'Tidak ada player ditemukan.' });
 
             var streams = [];
 
-            await Promise.all(players.map(async function(playerHref) {
+            await Promise.all(playerHrefs.map(async function(playerHref, idx) {
                 if (!playerHref) return;
+                var serverName = (playerDataServer[idx] || playerText[idx] || '').trim().toLowerCase();
+
                 try {
                     var fullHref = playerHref.startsWith('http') ? playerHref : (getBaseUrl(url) + playerHref);
-                    var pageHtml = getBody(await http_get(fullHref, { ...HTML_HDR, 'Referer': SERIES_URL + '/' }));
-                    var iframes  = await parseHtml(pageHtml, 'div.embed-container iframe', 'src');
-                    var iframeSrc = iframes[0];
-                    if (!iframeSrc) return;
 
-                    var resolved = await resolveEmbed(iframeSrc, fullHref);
+                    // For playeriframe.sbs servers, resolve directly without fetching the wrapper page again
+                    var resolved = await resolveEmbed(fullHref, serverName, url);
+
+                    if (!resolved || !resolved.length) {
+                        // Fallback: fetch wrapper page and look for nested iframe
+                        var pageHtml = getBody(await http_get(fullHref, { ...HTML_HDR, 'Referer': SERIES_URL + '/' }));
+                        var iframes  = await parseHtml(pageHtml, 'div.embed-container iframe', 'src');
+                        var iframeSrc = iframes[0];
+                        if (iframeSrc) {
+                            resolved = await resolveEmbed(iframeSrc, serverName, fullHref);
+                        }
+                    }
+
                     if (resolved && resolved.length) {
                         streams = streams.concat(resolved);
                     }
