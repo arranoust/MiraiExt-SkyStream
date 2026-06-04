@@ -47,20 +47,23 @@
 
     // ─── Resolvers ────────────────────────────────────────────────────────────
 
+    function extractQuality(url) {
+        var m = (url || '').match(/[/_](\d{3,4}p?)\.m3u8/i) || (url || '').match(/[/_](2160|1080|720|480|360|240)(?:[^0-9]|$)/i);
+        return m ? m[1].replace(/p?$/, '') + 'p' : '';
+    }
+
     // P2P — POST to cloud.hownetwork.xyz/api2.php
     async function resolveHownetwork(embedUrl) {
         try {
-            var id  = embedUrl.split('id=')[1] || embedUrl.split('/').pop() || '';
-            // playeriframe.sbs/iframe/p2p/{token} → extract token
             var tokenMatch = embedUrl.match(/\/iframe\/p2p\/([^/?]+)/);
-            var token = tokenMatch ? tokenMatch[1] : id;
+            var token = tokenMatch ? tokenMatch[1] : (embedUrl.split('id=')[1] || embedUrl.split('/').pop() || '');
 
             var apiUrl = 'https://cloud.hownetwork.xyz/api2.php?id=' + encodeURIComponent(token);
             var res = await http_post(
                 apiUrl,
                 {
                     'User-Agent':       UA,
-                    'Referer':          embedUrl,
+                    'Referer':          'https://playeriframe.sbs/',
                     'X-Requested-With': 'XMLHttpRequest',
                     'Content-Type':     'application/x-www-form-urlencoded',
                     'Origin':           'https://playeriframe.sbs'
@@ -70,11 +73,15 @@
             var json = JSON.parse(getBody(res));
             var file = json.file || json.url || null;
             if (!file) return null;
+            var quality = extractQuality(file) || 'P2P';
             return new StreamResult({
                 url:     file,
-                quality: 'Multi Quality',
-                source:  'P2P',
-                headers: { 'Referer': 'https://playeriframe.sbs/' }
+                quality: quality,
+                source:  'P2P | ' + quality,
+                headers: {
+                    'Referer': 'https://playeriframe.sbs/',
+                    'Origin':  'https://playeriframe.sbs'
+                }
             });
         } catch (_) { return null; }
     }
@@ -101,8 +108,8 @@
 
             return new StreamResult({
                 url:     m[1],
-                quality: 'Multi Quality',
-                source:  'TurboVIP',
+                quality: extractQuality(m[1]) || 'TurboVIP',
+                source:  'TurboVIP' + (extractQuality(m[1]) ? ' | ' + extractQuality(m[1]) : ''),
                 headers: { 'Referer': getBaseUrl(iframeSrc) + '/', 'Origin': getBaseUrl(iframeSrc) }
             });
         } catch (_) { return null; }
@@ -130,8 +137,8 @@
 
             return new StreamResult({
                 url:     m[1],
-                quality: 'Multi Quality',
-                source:  'Cast',
+                quality: extractQuality(m[1]) || 'Cast',
+                source:  'Cast' + (extractQuality(m[1]) ? ' | ' + extractQuality(m[1]) : ''),
                 headers: { 'Referer': getBaseUrl(iframeSrc) + '/' }
             });
         } catch (_) { return null; }
