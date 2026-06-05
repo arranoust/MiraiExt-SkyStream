@@ -1,8 +1,11 @@
 {
   "packageName": "com.arranoust.layarkaca",
   "name": "LayarKaca",
-  "version": 2,
+  "version": 3,
   "baseUrl": "https://lk21.de",
+  "domains": [
+    { "name": "lk21.de", "url": "https://lk21.de" }
+  ],
   "description": "LayarKaca - Film & Series Subtitle Indonesia",
   "authors": [
     "arranoust"

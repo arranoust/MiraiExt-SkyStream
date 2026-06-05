@@ -1,74 +1,87 @@
 (function () {
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // CONFIG
-    // ─────────────────────────────────────────────────────────────────────────
-    var MAX_RPM        = 45;
-    var MIN_INTERVAL   = Math.ceil(60000 / MAX_RPM); // ~1333 ms antar request
-    var CACHE_TTL      = 5 * 60000;  // 5 menit cache per URL
-    var MAX_STREAMS    = 3;
+    // ─── Config ───────────────────────────────────────────────────────────────
+    var manifest = { baseUrl: 'https://www.sankavollerei.com' };
+
+    var MAX_RPM          = 45;
+    var MIN_INTERVAL     = Math.ceil(60000 / MAX_RPM);
+    var CACHE_TTL        = 5 * 60000;
+    var STREAM_CACHE_TTL = 30 * 1000; // short TTL for signed/rotating CDN URLs
+    var MAX_STREAMS      = 3;
 
     var HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept':     'application/json'
     };
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // RATE LIMITER
-    // ─────────────────────────────────────────────────────────────────────────
+    var HOME_CATEGORIES = [
+        { key: 'Terbaru',   path: '/anime/samehadaku/recent'    },
+        { key: 'Ongoing',   path: '/anime/samehadaku/ongoing'   },
+        { key: 'Completed', path: '/anime/samehadaku/completed' },
+        { key: 'Movies',    path: '/anime/samehadaku/movies'    }
+    ];
+
+    // ─── Rate Limiter ─────────────────────────────────────────────────────────
     var _queue       = [];
     var _running     = false;
     var _lastReqTime = 0;
     var _reqCount    = 0;
     var _windowStart = Date.now();
 
-    function _resetWindowIfNeeded() {
+    function _resetWindow() {
         var now = Date.now();
-        if (now - _windowStart >= 60000) {
-            _reqCount    = 0;
-            _windowStart = now;
-        }
+        if (now - _windowStart >= 60000) { _reqCount = 0; _windowStart = now; }
     }
 
     function _scheduleNext() {
-        if (_running || _queue.length === 0) return;
+        if (_running || !_queue.length) return;
         _running = true;
-
         var task = _queue.shift();
-        _resetWindowIfNeeded();
+        _resetWindow();
 
         if (_reqCount >= MAX_RPM) {
             var wait = 60000 - (Date.now() - _windowStart) + 50;
-            setTimeout(function () {
+            return setTimeout(function () {
                 _running = false;
                 _queue.unshift(task);
                 _scheduleNext();
             }, wait);
-            return;
         }
 
-        var now     = Date.now();
-        var elapsed = now - _lastReqTime;
-        var delay   = elapsed < MIN_INTERVAL ? (MIN_INTERVAL - elapsed + Math.floor(Math.random() * 200)) : 0;
-
+        var delay = Math.max(0, MIN_INTERVAL - (Date.now() - _lastReqTime)) + Math.floor(Math.random() * 200);
         setTimeout(function () {
             _lastReqTime = Date.now();
             _reqCount++;
-            task.fn().then(function (result) {
-                task.resolve(result);
-            }).catch(function (err) {
-                task.reject(err);
-            }).finally(function () {
-                _running = false;
-                _scheduleNext();
-            });
+            task.fn()
+                .then(task.resolve)
+                .catch(task.reject)
+                .finally(function () { _running = false; _scheduleNext(); });
         }, delay);
     }
 
-    function rateLimitedGet(url, hdrs) {
-        var cached = _cacheGet(url);
-        if (cached !== null) return Promise.resolve(cached);
+    // ─── Cache ────────────────────────────────────────────────────────────────
+    var _cache = {};
 
+    function _cacheGet(url, ttl) {
+        var entry = _cache[url];
+        if (!entry || Date.now() - entry.ts > (ttl || CACHE_TTL)) {
+            delete _cache[url];
+            return null;
+        }
+        return entry.val;
+    }
+
+    function _cachePut(url, val) {
+        _cache[url] = { val: val, ts: Date.now() };
+        var keys = Object.keys(_cache);
+        if (keys.length > 200) {
+            delete _cache[keys.sort(function (a, b) { return _cache[a].ts - _cache[b].ts; })[0]];
+        }
+    }
+
+    function rateLimitedGet(url, hdrs, ttl) {
+        var cached = _cacheGet(url, ttl);
+        if (cached !== null) return Promise.resolve(cached);
         return new Promise(function (resolve, reject) {
             _queue.push({
                 fn: function () {
@@ -84,312 +97,159 @@
         });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // IN-MEMORY CACHE
-    // ─────────────────────────────────────────────────────────────────────────
-    var _cache = {};
-
-    function _cacheGet(url) {
-        var entry = _cache[url];
-        if (!entry) return null;
-        if (Date.now() - entry.ts > CACHE_TTL) {
-            delete _cache[url];
-            return null;
-        }
-        return entry.val;
-    }
-
-    function _cachePut(url, val) {
-        _cache[url] = { val: val, ts: Date.now() };
-        var keys = Object.keys(_cache);
-        if (keys.length > 200) {
-            var oldest = keys.sort(function(a, b) { return _cache[a].ts - _cache[b].ts; })[0];
-            delete _cache[oldest];
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── Helpers ──────────────────────────────────────────────────────────────
     function parseJSON(res) {
         try {
             return typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
         } catch (e) {
-            throw new Error("Gagal parse JSON: " + String(e));
+            throw new Error('Failed to parse JSON: ' + String(e));
         }
     }
 
-    function toItem(item, baseUrl) {
+    function toItem(item) {
         return new MultimediaItem({
-            title:     String(item.title || "No Title"),
-            url:       baseUrl + "/anime/samehadaku/anime/" + item.animeId,
-            posterUrl: String(item.poster || ""),
+            title:     String(item.title || 'No Title'),
+            url:       manifest.baseUrl + '/anime/samehadaku/anime/' + item.animeId,
+            posterUrl: String(item.poster || ''),
             type:      'anime'
         });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ANILIST 
-    // ─────────────────────────────────────────────────────────────────────────
-
+    // ─── AniList ──────────────────────────────────────────────────────────────
     async function getAniListData(title) {
         if (!title) return null;
-
-        var query = [
-            'query ($search: String) {',
-            '  Media(search: $search, type: ANIME) {',
-            '    idMal',
-            '    characters(sort: ROLE, perPage: 15) {',
-            '      edges {',
-            '        role',
-            '        node {',
-            '          name { full native }',
-            '          image { large medium }',
-            '        }',
-            '      }',
-            '    }',
-            '  }',
-            '}'
-        ].join(' ');
-
-        var payload = JSON.stringify({
-            query:     query,
-            variables: { search: title }
-        });
-
+        var query = 'query($s:String){Media(search:$s,type:ANIME){idMal characters(sort:ROLE,perPage:15){edges{role node{name{full native}image{large medium}}}}}}';
         try {
-            var res = await http_post(
-                'https://graphql.anilist.co',
-                { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                payload
+            var res  = await http_post('https://graphql.anilist.co',
+                { 'Content-Type': 'application/json', Accept: 'application/json' },
+                JSON.stringify({ query: query, variables: { s: title } })
             );
-            if (!res || !res.body) return null;
-            var data  = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
-            var media = data && data.data && data.data.Media;
+            var data  = typeof res?.body === 'string' ? JSON.parse(res.body) : res?.body;
+            var media = data?.data?.Media;
             if (!media) return null;
-            return {
-                idMal:      media.idMal ? String(media.idMal) : null,
-                characters: media.characters && media.characters.edges
-                    ? media.characters.edges
-                    : []
-            };
-        } catch (e) {
-            return null;
-        }
+            return { idMal: media.idMal ? String(media.idMal) : null, characters: media.characters?.edges ?? [] };
+        } catch (_) { return null; }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ANIZIP 
-    // ─────────────────────────────────────────────────────────────────────────
-
+    // ─── AniZip ───────────────────────────────────────────────────────────────
     async function getAniZipByMalId(malId) {
         if (!malId) return null;
-        var url = 'https://api.ani.zip/mappings?mal_id=' + malId;
         try {
-            var res = await http_get(url, { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' });
-            if (!res || !res.body) return null;
-            var data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
-            return (data && data.episodes) ? data : null;
-        } catch (e) {
-            return null;
-        }
+            var res  = await http_get('https://api.ani.zip/mappings?mal_id=' + malId,
+                { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' });
+            var data = typeof res?.body === 'string' ? JSON.parse(res.body) : res?.body;
+            return data?.episodes ? data : null;
+        } catch (_) { return null; }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Resolver
-    // ─────────────────────────────────────────────────────────────────────────
-    
-    // Blogger
+    // ─── Blogger resolver ─────────────────────────────────────────────────────
     async function resolveBlogger(embedUrl) {
         try {
-            var res = await rateLimitedGet(embedUrl, { "User-Agent": "Mozilla/5.0" });
-            if (!res) return null;
+            var res   = await rateLimitedGet(embedUrl, { 'User-Agent': 'Mozilla/5.0' });
             var match = res.body.match(/"play_url"\s*:\s*"([^"]+)"/)
                      || res.body.match(/"iurl"\s*:\s*"([^"]+)"/);
             if (!match) return null;
             return match[1]
-                .replace(/\\u003d/g, "=")
-                .replace(/\\u0026/g, "&")
-                .replace(/\\\//g, "/");
-        } catch (_) {
-            return null;
-        }
+                .replace(/\\u003d/g, '=')
+                .replace(/\\u0026/g, '&')
+                .replace(/\\\//g, '/');
+        } catch (_) { return null; }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // getHome
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── getHome ──────────────────────────────────────────────────────────────
     async function getHome(cb) {
         try {
-            var base   = manifest.baseUrl;
-            var result = {};
-
-            var categories = [
-                { key: "Terbaru",   path: "/anime/samehadaku/recent"    },
-                { key: "Ongoing",   path: "/anime/samehadaku/ongoing"   },
-                { key: "Completed", path: "/anime/samehadaku/completed" },
-                { key: "Movies",    path: "/anime/samehadaku/movies"    }
-            ];
-
-            for (var ci = 0; ci < categories.length; ci++) {
+            var results = await Promise.all(HOME_CATEGORIES.map(async function (cat) {
                 try {
-                    var cat  = categories[ci];
-                    var res  = await rateLimitedGet(base + cat.path);
-                    if (!res) continue;
+                    var res  = await rateLimitedGet(manifest.baseUrl + cat.path);
                     var json = parseJSON(res);
-                    var list = ((json.data && json.data.animeList) ? json.data.animeList : [])
-                        .map(function (i) { return toItem(i, base); });
-                    if (list.length > 0) result[cat.key] = list;
-                } catch (_) {}
-            }
+                    var list = (json?.data?.animeList ?? []).map(toItem);
+                    return { key: cat.key, list: list };
+                } catch (_) { return { key: cat.key, list: [] }; }
+            }));
 
-            if (Object.keys(result).length === 0) {
-                cb({ success: false, error: "Tidak ada data dari API." });
-                return;
-            }
-            cb({ success: true, data: result });
-        } catch (e) {
-            cb({ success: false, error: String(e) });
-        }
+            var data = {};
+            results.forEach(function (r) { if (r.list.length) data[r.key] = r.list; });
+
+            if (!Object.keys(data).length)
+                return cb({ success: false, error: 'No data from API.' });
+            cb({ success: true, data: data });
+        } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // search
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── search ───────────────────────────────────────────────────────────────
     async function search(query, cb) {
         try {
-            var base = manifest.baseUrl;
-            var res  = await rateLimitedGet(base + "/anime/samehadaku/search?q=" + encodeURIComponent(query));
-            var json = parseJSON(res);
-            var items = ((json.data && json.data.animeList) ? json.data.animeList : [])
-                .map(function (i) { return toItem(i, base); });
+            var res   = await rateLimitedGet(manifest.baseUrl + '/anime/samehadaku/search?q=' + encodeURIComponent(query));
+            var json  = parseJSON(res);
+            var items = (json?.data?.animeList ?? []).map(toItem);
             cb({ success: true, data: items });
-        } catch (e) {
-            cb({ success: false, error: String(e) });
-        }
+        } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // load 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── load ─────────────────────────────────────────────────────────────────
     async function load(url, cb) {
         try {
-            var base = manifest.baseUrl;
-            var res  = await rateLimitedGet(url);
-
-            if (!res || !res.body) {
-                cb({ success: false, error: "Respon API kosong atau bermasalah." });
-                return;
-            }
-
+            var res   = await rateLimitedGet(url);
             var json  = parseJSON(res);
             var anime = json.data || {};
 
-            var animeTitle = "";
-            if (anime.title) {
-                animeTitle = String(anime.title).trim();
-            } else if (anime.name) {
-                animeTitle = String(anime.name).trim();
-            }
-            if (!animeTitle || animeTitle === "undefined" || animeTitle === "") {
-                var urlParts = url.split('/');
-                var slug     = urlParts[urlParts.length - 1] || "Anime Detail";
-                animeTitle   = slug.replace(/-/g, ' ').toUpperCase();
+            var animeTitle = String(anime.title || anime.name || '').trim();
+            if (!animeTitle) {
+                var slug = url.split('/').filter(Boolean).pop() || 'Anime';
+                animeTitle = slug.replace(/-/g, ' ').toUpperCase();
             }
 
-            var synopsis    = (anime.synopsis && anime.synopsis.paragraphs)
-                ? anime.synopsis.paragraphs.join("\n\n")
-                : "";
-            var animePoster = String(anime.poster || "");
+            var synopsis    = anime.synopsis?.paragraphs?.join('\n\n') ?? '';
+            var animePoster = String(anime.poster || '');
             var episodeList = anime.episodeList || [];
 
-            var searchTitles = [];
-            if (anime.english && String(anime.english).trim()) {
-                searchTitles.push(String(anime.english).trim());
-            }
-            if (animeTitle) searchTitles.push(animeTitle);
-            if (anime.japanese && String(anime.japanese).trim()) {
-                searchTitles.push(String(anime.japanese).trim());
-            }
+            var searchTitles = [anime.english, animeTitle, anime.japanese].filter(function (t) {
+                return t && String(t).trim();
+            }).map(String);
 
             var aniListData = null;
             var aniZip      = null;
-
-            try {
-                for (var ti = 0; ti < searchTitles.length; ti++) {
-                    aniListData = await getAniListData(searchTitles[ti]);
-                    if (aniListData && aniListData.idMal) break;
-                }
-
-                if (aniListData && aniListData.idMal) {
-                    aniZip = await getAniZipByMalId(aniListData.idMal);
-                }
-            } catch (_) {
+            for (var i = 0; i < searchTitles.length; i++) {
+                aniListData = await getAniListData(searchTitles[i]);
+                if (aniListData?.idMal) break;
             }
+            if (aniListData?.idMal) aniZip = await getAniZipByMalId(aniListData.idMal);
 
-            var cast = [];
-            if (aniListData && aniListData.characters.length > 0) {
-                cast = aniListData.characters.map(function (edge) {
-                    var node = edge.node;
-                    if (!node) return null;
-                    return new Actor({
-                        name:  (node.name && (node.name.full || node.name.native)) || "Unknown",
-                        role:  edge.role || "SUPPORTING",
-                        image: (node.image && (node.image.large || node.image.medium)) || ""
-                    });
-                }).filter(function (a) { return a !== null; });
-            }
+            var cast = (aniListData?.characters ?? []).map(function (edge) {
+                var node = edge.node;
+                if (!node) return null;
+                return new Actor({
+                    name:  node.name?.full || node.name?.native || 'Unknown',
+                    role:  edge.role || 'SUPPORTING',
+                    image: node.image?.large || node.image?.medium || ''
+                });
+            }).filter(Boolean);
 
-            var episodes = episodeList.slice().reverse().map(function(ep, index) {
-                var epNum = parseFloat(ep.title) || (index + 1);
+            var resolvedTitle = aniZip?.titles?.en || aniZip?.titles?.['x-jat'] || aniZip?.titles?.ja || animeTitle;
+            var rawStatus     = String(anime.status || '').toLowerCase();
+            var status        = (rawStatus.includes('complet') || rawStatus.includes('tamat')) ? 'completed' : 'ongoing';
+            var score         = parseFloat(anime.score || anime.rating || anime.voteAverage || 0) || undefined;
 
-                var epKeyExact = String(ep.title);
-                var epKeyFloor = String(Math.floor(epNum));
-                var aniEp = null;
-                if (aniZip && aniZip.episodes) {
-                    aniEp = aniZip.episodes[epKeyExact] || aniZip.episodes[epKeyFloor] || null;
-                }
+            var episodes = episodeList.slice().reverse().map(function (ep, index) {
+                var epNum    = parseFloat(ep.title) || (index + 1);
+                var aniEp    = aniZip?.episodes?.[String(ep.title)] || aniZip?.episodes?.[String(Math.floor(epNum))] || null;
 
-                var epName = "Episode " + ep.title;
-                if (aniEp && aniEp.title) {
-                    epName = aniEp.title.en
-                          || aniEp.title['x-jat']
-                          || aniEp.title.ja
-                          || epName;
-                }
-
-                var epPoster = animePoster;
-                if (ep.poster) epPoster = String(ep.poster);
-                if (aniEp && aniEp.image) epPoster = aniEp.image;
-
-                var epDesc    = (aniEp && aniEp.overview) ? String(aniEp.overview) : "";
-                var epRuntime = (aniEp && aniEp.runtime)  ? aniEp.runtime           : undefined;
+                var epName   = aniEp?.title?.en || aniEp?.title?.['x-jat'] || aniEp?.title?.ja || ('Episode ' + ep.title);
+                var epPoster = aniEp?.image || (ep.poster ? String(ep.poster) : animePoster);
+                var epDesc   = aniEp?.overview ? String(aniEp.overview) : '';
 
                 return new Episode({
                     name:        epName,
-                    posterUrl:   epPoster,
-                    url:         base + "/anime/samehadaku/episode/" + ep.episodeId,
+                    url:         manifest.baseUrl + '/anime/samehadaku/episode/' + ep.episodeId,
                     season:      1,
                     episode:     epNum,
-                    dubStatus:   "subbed",
+                    dubStatus:   'subbed',
+                    posterUrl:   epPoster,
                     description: epDesc,
-                    runtime:     epRuntime
+                    runtime:     aniEp?.runtime || undefined
                 });
             });
-
-            // Status & Score
-            var rawStatus = String(anime.status || "").toLowerCase();
-            var status    = rawStatus.includes("complet") || rawStatus.includes("tamat") ? "completed" : "ongoing";
-            var score     = parseFloat(anime.score || anime.rating || anime.voteAverage || 0) || undefined;
-
-            // Final title: prefer AniZip English title
-            var resolvedTitle = animeTitle;
-            if (aniZip && aniZip.titles) {
-                resolvedTitle = aniZip.titles.en
-                    || aniZip.titles['x-jat']
-                    || aniZip.titles.ja
-                    || animeTitle;
-            }
 
             cb({
                 success: true,
@@ -405,108 +265,74 @@
                     episodes:    episodes
                 })
             });
-        } catch (e) {
-            cb({ success: false, error: String(e) });
-        }
+        } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // loadStreams
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── loadStreams ───────────────────────────────────────────────────────────
     async function loadStreams(url, cb) {
         try {
-            var base    = manifest.baseUrl;
-            var res     = await rateLimitedGet(url);
-            var json    = parseJSON(res);
-            var epData  = json.data || {};
+            // Use short TTL so rotating/signed CDN URLs aren't served stale
+            var res    = await rateLimitedGet(url, HEADERS, STREAM_CACHE_TTL);
+            var json   = parseJSON(res);
+            var epData = json.data || {};
             var streams = [];
 
-            var serverQualities = (epData.server && epData.server.qualities)
-                ? epData.server.qualities
-                : [];
+            var qualities = epData.server?.qualities ?? [];
 
-            outerServer:
-            for (var qi = 0; qi < serverQualities.length; qi++) {
-                var q      = serverQualities[qi];
-                var qTitle = String(q.title || "").toLowerCase();
+            outer:
+            for (var qi = 0; qi < qualities.length; qi++) {
+                var q = qualities[qi];
+                if (!q.title || String(q.title).toLowerCase() === 'unknown') continue;
 
-                if (!q.title || qTitle === "unknown") continue;
-
-                var srvList = q.serverList || [];
-
-                for (var si = 0; si < srvList.length; si++) {
-                    var srv = srvList[si];
+                for (var si = 0; si < (q.serverList || []).length; si++) {
+                    var srv = q.serverList[si];
                     if (!srv.href) continue;
 
                     try {
-                        var srvUrl  = base + "/anime" + srv.href;
-                        var srvRes  = await rateLimitedGet(srvUrl);
-                        if (!srvRes) continue;
+                        var srvRes    = await rateLimitedGet(manifest.baseUrl + '/anime' + srv.href, HEADERS, STREAM_CACHE_TTL);
+                        var srvJson   = parseJSON(srvRes);
+                        var streamUrl = String(srvJson.data?.url || '').trim();
+                        if (!streamUrl) continue;
 
-                        var srvJson = parseJSON(srvRes);
-                        if (!srvJson.data || !srvJson.data.url) continue;
+                        var serverName = String(srv.title || '').toLowerCase();
+                        var resolved   = null;
 
-                        var streamUrl  = String(srvJson.data.url).trim();
-                        var serverName = String(srv.title || "").toLowerCase();
-                        var isValidSource = false;
+                        if (streamUrl.includes('blogger.com/video') || serverName.includes('blogger') || serverName.includes('blogpost')) {
+                            resolved = await resolveBlogger(streamUrl);
+                            if (resolved) streamUrl = resolved;
+                            else continue;
+                        } else if (streamUrl.includes('pixeldrain.com/u/') || serverName.includes('pixeldrain')) {
+                            streamUrl = streamUrl.replace('pixeldrain.com/u/', 'pixeldrain.com/api/file/');
+                        } else if (!streamUrl.includes('wibufile.com') && !serverName.includes('wibufile')) {
+                            continue; // skip unsupported hosts
+                        }
 
-                        // ── 1. BLOGGER ──
-                        if (streamUrl.indexOf("blogger.com/video") !== -1 || serverName.includes("blogger") || serverName.includes("blogpost")) {
-                            var resolvedBlogger = await resolveBlogger(streamUrl);
-                            if (resolvedBlogger) {
-                                streamUrl     = resolvedBlogger;
-                                isValidSource = true;
+                        streams.push(new StreamResult({
+                            url:     streamUrl,
+                            source:  String(srv.title || 'Server'),
+                            headers: {
+                                Referer:      'https://v2.samehadaku.how/',
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
                             }
-                        }
-
-                        // ── 2. PIXELDRAIN ──
-                        else if (streamUrl.indexOf("pixeldrain.com/u/") !== -1 || serverName.includes("pixeldrain")) {
-                            streamUrl     = streamUrl.replace("pixeldrain.com/u/", "pixeldrain.com/api/file/");
-                            isValidSource = true;
-                        }
-
-                        // ── 3. WIBUFILE ──
-                        else if (streamUrl.indexOf("wibufile.com") !== -1 || serverName.includes("wibufile")) {
-                            if (streamUrl.indexOf("http") !== -1) {
-                                isValidSource = true;
-                            }
-                        }
-
-                        if (isValidSource) {
-                            streams.push(new StreamResult({
-                                url:     streamUrl,
-                                source:  String(srv.title || "Server"),
-                                headers: {
-                                    "Referer":    "https://v2.samehadaku.how/",
-                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                                }
-                            }));
-                            break;
-                        }
-
-                    } catch (_) {
-                        continue;
-                    }
+                        }));
+                        break;
+                    } catch (_) { continue; }
                 }
 
-                if (streams.length >= MAX_STREAMS) break outerServer;
+                if (streams.length >= MAX_STREAMS) break outer;
             }
 
-            if (streams.length === 0) {
-                cb({ success: false, error: "Tidak ada stream dari Blogger/Wibufile/Pixeldrain yang siap putar." });
-                return;
-            }
+            if (!streams.length)
+                return cb({ success: false, error: 'No playable streams found (Blogger/Wibufile/Pixeldrain).' });
 
             cb({ success: true, data: streams });
-        } catch (e) {
-            cb({ success: false, error: String(e) });
-        }
+        } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── Expose ───────────────────────────────────────────────────────────────
     globalThis.getHome     = getHome;
     globalThis.search      = search;
     globalThis.load        = load;
-    globalThis.loadStreams = loadStreams;
+    globalThis.loadStreams  = loadStreams;
 
 })();
