@@ -4,6 +4,6 @@
   "description": "Keeping your streams up!",
   "manifestVersion": 1,
   "pluginLists": [
-    "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/build-test/plugins.json"
+    "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/build/plugins.json"
   ]
 }
