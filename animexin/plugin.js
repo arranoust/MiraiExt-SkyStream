@@ -10,9 +10,8 @@
     var HOME_CATEGORIES = [
         { name: 'Recently Updated', path: '/anime/?status=ongoing&order=update' },
         { name: 'Popular',          path: '/anime/?status=ongoing&order=popular' },
-        { name: 'Donghua',          path: '/anime/' },
-        { name: 'Movies',           path: '/anime/?status=&type=movie' },
-        { name: 'Anime RAW',        path: '/anime/?sub=raw' }
+        { name: 'Completed',         path: '/anime/?status=completed&order=update' },
+        { name: 'Movies',           path: '/anime/?status=&type=movie' }
     ];
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
