@@ -2,7 +2,7 @@
   {
     "packageName": "com.arranoust.animexin",
     "name": "AnimeXin",
-    "version": 4,
+    "version": 1,
     "baseUrl": "https://animexin.dev",
     "description": "AnimeXin - Streaming Donghua with Subtitles",
     "authors": [
