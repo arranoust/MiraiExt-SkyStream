@@ -45,11 +45,12 @@ https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json
 
 | No. | Extension | Region | Content Type |
 | :--- | :--- | :--- | :--- |
-| 1 | **Anizone** | EN | Anime |
-| 2 | **LayarKaca** | ID | Movies & Series |
-| 3 | **OtakuDesu** | ID | Anime |
-| 4 | **Samehadaku** | ID | Anime |
-| 5 | **Torrentio** | Global | Torrents |
+| 1 | **AnimeXin** | EN | Donghua |
+| 2 | **Anizone** | EN | Anime |
+| 3 | **LayarKaca** | ID | Movies & Series |
+| 4 | **OtakuDesu** | ID | Anime |
+| 5 | **Samehadaku** | ID | Anime |
+| 6 | **Torrentio** | Global | Torrents |
 
 > [!WARNING]
 > **Disclaimer & Legal Notice**
