@@ -150,18 +150,57 @@
         } catch (_) { return null; }
     }
 
+    // ─── resolvePixelDrainDownload ────────────────────────────────────────────
+    async function resolvePixelDrainDownload(episodeUrl) {
+        try {
+            var html = getBody(await rawGet(episodeUrl));
+
+            var dlStart = html.indexOf('<div class="download">');
+            if (dlStart === -1) return [];
+            var dlEnd = html.indexOf('<div class="keyword">', dlStart);
+            var dlHtml = dlEnd > -1 ? html.substring(dlStart, dlEnd) : html.substring(dlStart, dlStart + 10000);
+
+            var parts = dlHtml.split(/<li>/i).slice(1);
+            var tasks = [];
+            for (var i = 0; i < parts.length; i++) {
+                var li = parts[i];
+                if (!li.includes('Pdrain')) continue;
+                var qm = li.match(/<strong>([^<]+)<\/strong>/);
+                var um = li.match(/href="(https:\/\/link\.desustream\.com\/[^"]+)"[^>]*>Pdrain/i);
+                if (qm && um) tasks.push({ quality: qm[1].trim(), wrapperUrl: um[1] });
+            }
+            if (!tasks.length) return [];
+
+            var results = await Promise.all(tasks.map(async function (t) {
+                try {
+                    var body    = getBody(await http_get(t.wrapperUrl, { 'User-Agent': UA, 'Accept': '*/*' }));
+                    var idMatch = body.match(/pixeldrain\.com\/u\/([a-zA-Z0-9]+)/)
+                               || body.match(/["']\/api\/file\/([a-zA-Z0-9]+)["']/);
+                    if (!idMatch) return null;
+                    return new StreamResult({
+                        url:     'https://pixeldrain.com/api/file/' + idMatch[1],
+                        quality: t.quality,
+                        source:  'PixelDrain | ' + t.quality,
+                        headers: { Referer: 'https://pixeldrain.com/' }
+                    });
+                } catch (_) { return null; }
+            }));
+            return results.filter(Boolean);
+        } catch (_) { return []; }
+    }
+
     async function resolveAny(embedUrl, serverName, episodeReferer) {
         try {
             if (isPlayable(embedUrl)) {
                 try { return { url: embedUrl, referer: new URL(embedUrl).origin + '/' }; }
                 catch (_) { return { url: embedUrl, referer: episodeReferer }; }
             }
-            if (embedUrl.includes('archive.org'))                                        return { url: embedUrl, referer: 'https://archive.org/' };
-            if (embedUrl.includes('googlevideo'))                                        return { url: embedUrl, referer: 'https://www.blogger.com/' };
-            if (embedUrl.includes('mega.nz'))                                            return null;
-            if (embedUrl.includes('filedon') || serverName.includes('filedon'))          return resolveFiledon(embedUrl);
-            if (embedUrl.includes('blogger.com/video') || serverName.includes('blogger'))return resolveBlogger(embedUrl);
-            if (embedUrl.includes('ondesu') || serverName.includes('ondesu'))            return resolveOndesu(embedUrl, episodeReferer);
+            if (embedUrl.includes('archive.org'))                                          return { url: embedUrl, referer: 'https://archive.org/' };
+            if (embedUrl.includes('googlevideo'))                                          return { url: embedUrl, referer: 'https://www.blogger.com/' };
+            if (embedUrl.includes('mega.nz'))                                              return null;
+            if (embedUrl.includes('filedon') || serverName.includes('filedon'))            return resolveFiledon(embedUrl);
+            if (embedUrl.includes('blogger.com/video') || serverName.includes('blogger'))  return resolveBlogger(embedUrl);
+            if (embedUrl.includes('ondesu') || serverName.includes('ondesu'))              return resolveOndesu(embedUrl, episodeReferer);
             return resolveWithUnpack(embedUrl, episodeReferer);
         } catch (_) { return null; }
     }
@@ -187,7 +226,7 @@
             var media = data?.data?.Media;
             if (!media) return null;
             return {
-                idMal:      media.idMal ? String(media.idMal) : null,
+                idMal:     media.idMal ? String(media.idMal) : null,
                 idAniList: media.id    ? String(media.id)    : null,
                 characters: media.characters?.edges ?? []
             };
@@ -207,14 +246,12 @@
 
     // ─── fetchMetadata ────────────────────────────────────────────────────────
     async function fetchMetadata(titles) {
-    var validTitles = titles.filter(Boolean);
-    if (!validTitles.length) return { aniListData: null, aniZip: null };
-
-    var aniListData = await Promise.all(validTitles.map(getAniListData))
-        .then(function(results) { return results.find(function(r) { return r?.idMal; }) || null; });
-
-    var aniZip = aniListData?.idMal ? await getAniZipByMalId(aniListData.idMal) : null;
-    return { aniListData, aniZip };
+        var validTitles = titles.filter(Boolean);
+        if (!validTitles.length) return { aniListData: null, aniZip: null };
+        var aniListData = await Promise.all(validTitles.map(getAniListData))
+            .then(function (results) { return results.find(function (r) { return r?.idMal; }) || null; });
+        var aniZip = aniListData?.idMal ? await getAniZipByMalId(aniListData.idMal) : null;
+        return { aniListData, aniZip };
     }
 
     // ─── Shared list page parser ──────────────────────────────────────────────
@@ -365,8 +402,8 @@
 
             var episodes = validLinks.map(function (href, idx) {
                 var rawEpTitle = (validTitles[idx] || '')
-                .replace(/\s*subtitle\s+indonesia\s*/gi, '')
-                .trim();
+                    .replace(/\s*subtitle\s+indonesia\s*/gi, '')
+                    .trim();
 
                 var epNumRaw = parseFloat(href.match(/episode[- ](\d+(?:\.\d+)?)/i)?.[1])
                     || parseFloat(rawEpTitle.match(/episode\s+(\d+(?:\.\d+)?)/i)?.[1])
@@ -404,9 +441,7 @@
                     cast,
                     episodes,
                     syncData:    aniListData?.idMal ?
-                        { mal: aniListData.idMal,
-                          anilist: aniListData.idAniList
-                    } : undefined
+                        { mal: aniListData.idMal, anilist: aniListData.idAniList } : undefined
                 })
             });
         } catch (e) { cb({ success: false, error: String(e) }); }
@@ -439,49 +474,57 @@
 
             if (!nonce) return cb({ success: false, error: 'Gagal mengambil nonce.' });
 
-            var tasks = dataContents.map(async function (dataContent, i) {
-                try {
-                    dataContent = (dataContent || '').trim();
-                    if (!dataContent || dataContent === '#') return null;
+            var mirrorTask = (async function () {
+                var tasks = dataContents.map(async function (dataContent, i) {
+                    try {
+                        dataContent = (dataContent || '').trim();
+                        if (!dataContent || dataContent === '#') return null;
 
-                    var decoded = safeAtob(dataContent);
-                    if (!decoded) return null;
+                        var decoded = safeAtob(dataContent);
+                        if (!decoded) return null;
 
-                    var tokenObj = null;
-                    try { tokenObj = JSON.parse(decoded); } catch (_) { return null; }
-                    if (tokenObj?.id === undefined) return null;
+                        var tokenObj = null;
+                        try { tokenObj = JSON.parse(decoded); } catch (_) { return null; }
+                        if (tokenObj?.id === undefined) return null;
 
-                    var postBody = 'id='     + encodeURIComponent(tokenObj.id)
-                                 + '&i='     + encodeURIComponent(tokenObj.i)
-                                 + '&q='     + encodeURIComponent(tokenObj.q)
-                                 + '&nonce=' + encodeURIComponent(nonce)
-                                 + '&action=2a3505c93b0035d3f455df82bf976b84';
+                        var postBody = 'id='     + encodeURIComponent(tokenObj.id)
+                                     + '&i='     + encodeURIComponent(tokenObj.i)
+                                     + '&q='     + encodeURIComponent(tokenObj.q)
+                                     + '&nonce=' + encodeURIComponent(nonce)
+                                     + '&action=2a3505c93b0035d3f455df82bf976b84';
 
-                    var embedRes  = await http_post(ajaxUrl, ajaxHeaders, postBody);
-                    var embedJson = JSON.parse(getBody(embedRes));
-                    if (!embedJson?.data) return null;
+                        var embedRes  = await http_post(ajaxUrl, ajaxHeaders, postBody);
+                        var embedJson = JSON.parse(getBody(embedRes));
+                        if (!embedJson?.data) return null;
 
-                    var iframeHtml = safeAtob(forceString(embedJson.data));
-                    if (!iframeHtml) return null;
+                        var iframeHtml = safeAtob(forceString(embedJson.data));
+                        if (!iframeHtml) return null;
 
-                    var embedUrl = iframeHtml.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1]
-                                || (/^https?:\/\//i.test(iframeHtml.trim()) ? iframeHtml.trim() : '');
-                    if (!embedUrl) return null;
+                        var embedUrl = iframeHtml.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1]
+                                    || (/^https?:\/\//i.test(iframeHtml.trim()) ? iframeHtml.trim() : '');
+                        if (!embedUrl) return null;
 
-                    var serverName = (serverNames[i] || '').trim().toLowerCase();
-                    var resolved   = await resolveAny(embedUrl, serverName, url);
-                    if (!resolved?.url) return null;
+                        var serverName = (serverNames[i] || '').trim().toLowerCase();
+                        var resolved   = await resolveAny(embedUrl, serverName, url);
+                        if (!resolved?.url) return null;
 
-                    return new StreamResult({
-                        url:     resolved.url,
-                        quality: tokenObj.q || undefined,
-                        source:  'OtakuDesu - ' + serverName + (tokenObj.q ? ' [' + tokenObj.q + ']' : ''),
-                        headers: { 'User-Agent': UA, Referer: resolved.referer || url }
-                    });
-                } catch (_) { return null; }
-            });
+                        return new StreamResult({
+                            url:     resolved.url,
+                            quality: tokenObj.q || undefined,
+                            source:  serverName + (tokenObj.q ? ' | ' + tokenObj.q + '' : ''),
+                            headers: { 'User-Agent': UA, Referer: resolved.referer || url }
+                        });
+                    } catch (_) { return null; }
+                });
+                return (await Promise.all(tasks)).filter(Boolean);
+            })();
 
-            var results = (await Promise.all(tasks)).filter(Boolean).slice(0, MAX_STREAMS);
+            var [mirrorStreams, pdStreams] = await Promise.all([
+                mirrorTask,
+                resolvePixelDrainDownload(url)
+            ]);
+
+            var results = [...mirrorStreams, ...pdStreams].slice(0, MAX_STREAMS);
 
             if (!results.length)
                 return cb({ success: false, error: 'Tidak ditemukan link streaming.' });
