@@ -1,7 +1,7 @@
 name: Build and Deploy Repository
 on:
   push:
-    branches: [ main, fix/torrentio ]
+    branches: [ main ]
     paths-ignore:
       - 'dist/**'
       - 'README.md'
