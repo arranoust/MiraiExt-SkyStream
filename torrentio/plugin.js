@@ -6,7 +6,7 @@
     var ANILIST_API = 'https://graphql.anilist.co';
     var ANI_ZIP     = 'https://api.ani.zip/mappings';
     var MEDIA_LIMIT = 20;
-    var MIN_SEEDERS = 5; // streams with fewer seeders are deprioritized (moved to end, not removed)
+    var MIN_SEEDERS = 5; 
 
     var TRACKERS = [
         'udp://tracker.opentrackr.org:1337/announce',
@@ -84,18 +84,14 @@
         return (title.match(/(2160p|1080p|720p|480p)/i) || [])[1] || 'Unknown';
     }
 
-    // Sort streams: high seeders first, then by quality tier, zero-seeder last
     function sortStreams(streams, seedersMap) {
         var qualityOrder = { '2160p': 4, '1080p': 3, '720p': 2, '480p': 1 };
         return streams.slice().sort(function(a, b) {
             var sa = seedersMap[a.url] || 0;
             var sb = seedersMap[b.url] || 0;
-            // Zero-seeder streams always go last
             if (sa === 0 && sb > 0) return 1;
             if (sb === 0 && sa > 0) return -1;
-            // Sort by seeders descending
             if (sb !== sa) return sb - sa;
-            // Tiebreak by quality
             var qa = qualityOrder[(a.quality || '').toLowerCase()] || 0;
             var qb = qualityOrder[(b.quality || '').toLowerCase()] || 0;
             return qb - qa;
@@ -105,7 +101,7 @@
     var isAnimeProvider = manifest.baseUrl.indexOf('nyaasi') !== -1;
 
     // ─────────────────────────────────────────────────────────────────────────
-    // TORRENTIO (Movies & Series)
+    // TORRENTIO 
     // ─────────────────────────────────────────────────────────────────────────
 
     async function torrentioGetHome(cb) {
