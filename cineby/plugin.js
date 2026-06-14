@@ -176,25 +176,29 @@
             .slice(0, 25)
             .map(s => ({ url: s.url, label: s.language, lang: s.language }));
 
-        const headers = { "Referer": referer, "Origin": origin, "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36" };
+        const headers = { "Referer": referer, "Origin": origin };
+
+        function proxyUrl(url) {
+            return "MAGIC_PROXY_v1" + btoa(url);
+        }
 
         if (result.sources && result.sources.length > 0) {
             const sources = server.qualityFilter
                 ? result.sources.filter(s => (s.quality || "").toLowerCase() === server.qualityFilter.toLowerCase())
                 : result.sources;
             return sources.map(src =>
-                new StreamResult({ url: src.url, source: buildLabel(server, src.quality || ""), headers, subtitles })
+                new StreamResult({ url: proxyUrl(src.url), source: buildLabel(server, src.quality || ""), headers, subtitles })
             );
         }
 
         if (result.streams) {
             return Object.entries(result.streams).map(([q, url]) =>
-                new StreamResult({ url, source: buildLabel(server, q), headers, subtitles })
+                new StreamResult({ url: proxyUrl(url), source: buildLabel(server, q), headers, subtitles })
             );
         }
 
         if (result.url) {
-            return [new StreamResult({ url: result.url, source: buildLabel(server, ""), headers, subtitles })];
+            return [new StreamResult({ url: proxyUrl(result.url), source: buildLabel(server, ""), headers, subtitles })];
         }
 
         return [];
