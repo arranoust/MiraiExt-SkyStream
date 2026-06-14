@@ -176,7 +176,7 @@
             .slice(0, 25)
             .map(s => ({ url: s.url, label: s.language, lang: s.language }));
 
-        const headers = { "Referer": referer, "Origin": origin };
+        const headers = { "Referer": referer, "Origin": origin, "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36" };
 
         if (result.sources && result.sources.length > 0) {
             const sources = server.qualityFilter
