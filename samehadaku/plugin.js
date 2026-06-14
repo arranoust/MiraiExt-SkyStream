@@ -39,22 +39,20 @@
         var slug = embedUrl.split('/embed/').pop().split(/[/?]/)[0];
         if (!slug) return null;
         var res = await http_get('https://filedon.co/embed/' + slug, {
-            'User-Agent': BASE_HEADERS['User-Agent'],
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
             'Referer': manifest.baseUrl + '/'
         });
         var pageMatch = res.body.match(/id="app"\s+data-page="([^"]+)"/);
         if (!pageMatch) return null;
         var json = JSON.parse(pageMatch[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
-        var url = json?.props?.url || json?.url || null;
-        if (url && url.startsWith('/')) url = 'https://filedon.co' + url;
-        return url;
+        return json?.props?.url || json?.url || null;
     }
 
     // ── AniList / AniZip ──
 
     async function getAniListData(title) {
         if (!title) return null;
-        var query = 'query($s:String){Media(search:$s,type:ANIME){idMal characters(sort:ROLE,perPage:15){edges{role node{name{full native}image{large medium}}}}}}';
+        var query = 'query($s:String){Media(search:$s,type:ANIME){id idMal bannerImage coverImage{extraLarge}nextAiringEpisode{episode timeUntilAiring}characters(sort:ROLE,perPage:15){edges{role node{name{full}image{large}}}}}}';
         try {
             var res = await http_post('https://graphql.anilist.co',
                 { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -63,7 +61,14 @@
             var data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
             var media = data?.data?.Media;
             if (!media) return null;
-            return { idMal: media.idMal ? String(media.idMal) : null, characters: media.characters?.edges ?? [] };
+            return {
+                id: String(media.id),
+                idMal: media.idMal ? String(media.idMal) : null,
+                characters: media.characters?.edges ?? [],
+                nextAiring: media.nextAiringEpisode || null,
+                bannerUrl: media.bannerImage || null,
+                logoUrl: media.coverImage?.extraLarge || null
+            };
         } catch (_) { return null; }
     }
 
@@ -179,32 +184,39 @@
                 }
             }
 
-            var titleArr   = await parse_html(body, 'h1.entry-title', 'text');
-            var posterArr  = await parse_html(body, 'div.thumb img', 'src');
-            var descArr    = await parse_html(body, 'div.desc', 'text');
-            var tagArr     = await parse_html(body, 'div.genre-info a', 'text');
-            var trailerArr = await parse_html(body, 'div.trailer-anime iframe', 'src');
-
+            var titleArr  = await parse_html(body, 'h1.entry-title', 'text');
             var animeTitle = (titleArr[0]?.text || 'Anime')
                 .replace(/nonton|anime|subtitle\s+indonesia|sub\s+indo|lengkap|batch/gi, '').trim();
 
+            var aniListPromise = getAniListData(animeTitle);
+
+            var [
+                posterArr, descArr, tagArr, trailerArr,
+                epHrefs, epNums, recLinks, recTitles, recPosters,
+                aniListData
+            ] = await Promise.all([
+                parse_html(body, 'div.thumb img', 'src'),
+                parse_html(body, 'div.desc', 'text'),
+                parse_html(body, 'div.genre-info a', 'text'),
+                parse_html(body, 'div.trailer-anime iframe', 'src'),
+                parse_html(body, '.epsleft .lchx a', 'href'),
+                parse_html(body, '.epsright .eps a', 'text'),
+                parse_html(body, 'div.rand-animesu a.series', 'href'),
+                parse_html(body, 'div.rand-animesu .judul', 'text'),
+                parse_html(body, 'div.rand-animesu img', 'src'),
+                aniListPromise,
+            ]);
+
+            var aniZip = aniListData?.idMal ? await getAniZipByMalId(aniListData.idMal) : null;
+
             var statusMatch = body.match(/Status[^:]*:\s*<[^>]+>([^<]+)</i);
             var yearMatch   = body.match(/Rilis[^<]*<\/[^>]+>[\s\S]*?,\s*(\d{4})/i);
-            var scoreMatch = body.match(/itemprop="ratingValue"[^>]*>([^<]+)</i);
+            var scoreMatch  = body.match(/itemprop="ratingValue"[^>]*>([^<]+)</i);
 
-            var recLinks   = await parse_html(body, 'div.rand-animesu a.series', 'href');
-            var recTitles  = await parse_html(body, 'div.rand-animesu .judul', 'text');
-            var recPosters = await parse_html(body, 'div.rand-animesu img', 'src');
             var recommendations = recLinks.map(function(h, i) {
                 if (!h?.attr || !recTitles[i]?.text) return null;
                 return new MultimediaItem({ title: recTitles[i].text.trim(), url: fixUrl(h.attr), posterUrl: fixUrl(recPosters[i]?.attr || ''), type: 'anime' });
             }).filter(Boolean);
-
-            var epHrefs = await parse_html(body, '.epsleft .lchx a', 'href');
-            var epNums  = await parse_html(body, '.epsright .eps a', 'text');
-
-            var [aniListData] = await Promise.all([getAniListData(animeTitle)]);
-            var aniZip = aniListData?.idMal ? await getAniZipByMalId(aniListData.idMal) : null;
 
             var cast = (aniListData?.characters ?? []).map(function(edge) {
                 var node = edge.node;
@@ -215,34 +227,23 @@
             var resolvedTitle = aniZip?.titles?.en || aniZip?.titles?.['x-jat'] || aniZip?.titles?.ja || animeTitle;
             var animePoster   = fixUrl(posterArr[0]?.attr || '');
 
-            var aniNextAiring = aniListData?.nextAiringEpisode;
-            var nextAiringObj = null;
-
-            if (aniNextAiring) {
-                nextAiringObj = new NextAiring({
-                    episode:  parseInt(aniNextAiring.episode),
-                    season:   1, 
-                    unixTime: aniNextAiring.airingAt 
-                });
-            }
-
             var episodes = epHrefs.map(function(href, i) {
-            if (!href?.attr) return null;
-            var epNum = parseInt(epNums[i]?.text) || (i + 1);
-            var aniEp = aniZip?.episodes?.[String(epNum)] || null;
-            return new Episode({
-                name:        aniEp?.title?.en || aniEp?.title?.['x-jat'] || ('Episode ' + epNum),
-                url:         fixUrl(href.attr),
-                season:      1,
-                episode:     epNum,
-                dubStatus:   'subbed',
-                posterUrl:   aniEp?.image || animePoster,
-                description: aniEp?.overview || '',
-                runtime:     aniEp?.runtime || undefined,
-                score:       aniEp?.score || undefined,
-                airDate:     aniEp?.airDateUtc ? aniEp.airDateUtc.substring(0, 10) : undefined
-            });
-        }).filter(Boolean).reverse();
+                if (!href?.attr) return null;
+                var epNum = parseInt(epNums[i]?.text) || (i + 1);
+                var aniEp = aniZip?.episodes?.[String(epNum)] || null;
+                return new Episode({
+                    name:        aniEp?.title?.en || aniEp?.title?.['x-jat'] || ('Episode ' + epNum),
+                    url:         fixUrl(href.attr),
+                    season:      1,
+                    episode:     epNum,
+                    dubStatus:   'subbed',
+                    posterUrl:   aniEp?.image || animePoster,
+                    description: aniEp?.overview || '',
+                    runtime:     aniEp?.runtime || undefined,
+                    score:       aniEp?.score || undefined,
+                    airDate:     aniEp?.airDateUtc ? aniEp.airDateUtc.substring(0, 10) : undefined
+                });
+            }).filter(Boolean).reverse();
 
             cb({
                 success: true,
@@ -260,7 +261,14 @@
                     tags:            tagArr.map(function(t) { return t?.text; }).filter(Boolean),
                     recommendations: recommendations,
                     episodes:        episodes,
-                    syncData:        aniListData?.idMal ? { mal: aniListData.idMal } : undefined
+                    syncData:        aniListData?.idMal ? { mal: aniListData.idMal, anilist: aniListData.id } : undefined,
+                    bannerUrl: aniListData?.bannerUrl || undefined,
+                    logoUrl:   aniListData?.logoUrl   || undefined,
+                    nextAiring: aniListData?.nextAiring ? new NextAiring({
+                        episode:  aniListData.nextAiring.episode,
+                        season:   1,
+                        unixTime: Math.floor(Date.now() / 1000) + aniListData.nextAiring.timeUntilAiring
+                    }) : undefined,
                 })
             });
         } catch (e) { cb({ success: false, error: String(e) }); }
@@ -320,16 +328,24 @@
             if (!videoUrl) return null;
             return new StreamResult({ url: videoUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://filedon.co/' } });
         }
+
         if (iframeUrl.includes('api.wibufile.com/embed/')) {
-            var res = await http_get(iframeUrl, { 'Referer': 'https://wibufile.com/', 'User-Agent': BASE_HEADERS['User-Agent'] });
-            var mp4Match = res.body.match(/["']file["']\s*:\s*["'](https?:\\?\/\\?\/[^"']+\.mp4[^"']*)['"]/i);
-            if (!mp4Match) return null;
-            var mp4Url = mp4Match[1].replace(/\\\//g, '/');
-            return new StreamResult({ url: mp4Url, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://wibufile.com/' } });
+            var res = await http_get(iframeUrl, { 'Referer': manifest.baseUrl + '/', 'User-Agent': BASE_HEADERS['User-Agent'] });
+            var sourcesMatch = res.body.match(/sources:\s*(\[.*?\])/s);
+            if (!sourcesMatch) return null;
+            try {
+                var sources = JSON.parse(sourcesMatch[1].replace(/\\\//g, '/'));
+                if (!sources.length) return null;
+                return sources.map(function(s) {
+                    return new StreamResult({ url: s.file, quality: fixQuality(s.label || label), source: label.trim(), headers: { Referer: 'https://api.wibufile.com/' } });
+                });
+            } catch (_) { return null; }
         }
+
         if (iframeUrl.includes('wibufile.com')) {
-            return new StreamResult({ url: iframeUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://wibufile.com/' } });
+            return new StreamResult({ url: iframeUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://api.wibufile.com/' } });
         }
+
         return null;
     }
 
