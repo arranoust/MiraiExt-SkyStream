@@ -1,7 +1,7 @@
 {
   "packageName": "com.arranoust.cineby",
   "name": "Cineby",
-  "version": 5,
+  "version": 6,
   "baseUrl": "https://cineby.at",
     "domains": [
       { "name": "cineby.at",    "url": "https://cineby.at" },

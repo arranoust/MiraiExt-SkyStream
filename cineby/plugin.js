@@ -136,6 +136,8 @@
                         season: sNum,
                         episode: ep.episode_number,
                         airDate: ep.air_date || null,
+                        description: ep.overview || null,
+                        posterUrl: ep.still_path ? `https://image.tmdb.org/t/p/w300${ep.still_path}` : null,
                     }));
                 }
             }
