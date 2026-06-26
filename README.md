@@ -41,7 +41,8 @@ https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json
 
 ---
 
-## 📦 Available Extensions
+<details>
+<summary><h2> 📦 Available Extensions </h2></summary>
 
 | No. | Extension | Region | Content Type |
 | :--- | :--- | :--- | :--- |
@@ -53,6 +54,7 @@ https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json
 | 6 | **OtakuDesu** | ID | Anime |
 | 7 | **Samehadaku** | ID | Anime |
 | 8 | **Torrentio** | Global | Torrents |
+</details>
 
 > [!WARNING]
 > **Disclaimer & Legal Notice**
