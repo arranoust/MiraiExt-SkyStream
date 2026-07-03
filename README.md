@@ -44,26 +44,25 @@ https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json
 <details>
 <summary><h2> 📦 Available Extensions </h2></summary>
 
-| No. | Extension | Region | Content Type |
-| :--- | :--- | :--- | :--- |
-| 1 | **AnimeXin** | EN | Donghua |
-| 2 | **Anizone** | EN | Anime |
-| 3 | **Cineby** | EN | Movies & Series |
-| 4 | **Idlix** | ID | Movies & Series |
-| 5 | **LayarKaca** | ID | Movies & Series |
-| 6 | **OtakuDesu** | ID | Anime |
-| 7 | **Samehadaku** | ID | Anime |
-| 8 | **Torrentio** | Global | Torrents |
+| Extension | Region | Content Type |
+| :--- | :--- | :--- |
+| **AnimeXin** | EN | Donghua |
+| **Anizone** | EN | Anime |
+| **Idlix** | ID | Movies & Series |
+| **LayarKaca** | ID | Movies & Series |
+| **OtakuDesu** | ID | Anime |
+| **Samehadaku** | ID | Anime |
+| **Torrentio** | Global | Torrents |
 </details>
 
 > [!WARNING]
 > **Disclaimer & Legal Notice**
-> 
+>
 > We hereby issue this notice to clarify that these extensions function similarly to a standard web browser by fetching video files from the internet.
 > - **No content is hosted** by this repository or the SkyStream application.
 > - Any content accessed is hosted by third-party websites.
 > - Users are solely responsible for their usage and must comply with their local laws.
-> 
+>
 > If you believe content is violating copyright laws, please contact the **actual file hosts**, not the developers of this repository or the SkyStream app.
 
 ---
