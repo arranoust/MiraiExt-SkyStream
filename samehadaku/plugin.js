@@ -53,18 +53,6 @@
         return m ? 'https://pixeldrain.com/api/file/' + m[1] + '?download' : null;
     }
 
-    async function resolveKrakenFiles(url) {
-        var m = url.match(/krakenfiles\.com\/(?:view|embed-video)\/([a-zA-Z0-9]+)/);
-        if (!m) return null;
-        try {
-            var res = await http_get('https://krakenfiles.com/embed-video/' + m[1], {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-            });
-            var src = res.body.match(/(?:phs|pchs)\d*\.krakencloud\.net\/play\/video\/[^"'\s]+/);
-            return src ? 'https://' + src[0] : null;
-        } catch (_) { return null; }
-    }
-
     async function resolveWibufile(iframeUrl, label) {
         var res = await http_get(iframeUrl, {
             'Referer': manifest.baseUrl + '/',
@@ -135,12 +123,6 @@
             regex: /href="(https:\/\/pixeldrain\.com\/u\/[^"]+)"/i,
             resolve: resolvePixelDrain,
             headers: { Referer: 'https://pixeldrain.com/' }
-        },
-        {
-            name: 'KrakenFiles',
-            regex: /href="(https:\/\/krakenfiles\.com\/view\/[^"]+)"/i,
-            resolve: resolveKrakenFiles,
-            headers: { Referer: 'https://krakenfiles.com/' }
         }
     ];
 
@@ -410,9 +392,9 @@
                 const parse = src => {
                     const q = (src || '').match(/2160p|1080p|720p|480p|360p/i)?.[0] || '';
                     const idx = Q.indexOf(q.toLowerCase());
-                    return { 
-                        server: (src || '').replace(q, '').trim().toLowerCase(), 
-                        qIndex: idx === -1 ? 99 : idx 
+                    return {
+                        server: (src || '').replace(q, '').trim().toLowerCase(),
+                        qIndex: idx === -1 ? 99 : idx
                     };
                 };
 
@@ -421,7 +403,7 @@
 
                 return valA.server.localeCompare(valB.server) || (valA.qIndex - valB.qIndex);
             });
-            
+
             if (!flat.length) return cb({ success: false, error: 'No playable streams found.' });
             cb({ success: true, data: flat });
         } catch (e) { cb({ success: false, error: String(e) }); }
