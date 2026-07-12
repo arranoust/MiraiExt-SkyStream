@@ -1,11 +1,8 @@
 {
   "packageName": "com.arranoust.anizone",
   "name": "AniZone",
-  "version": 7,
+  "version": 8,
   "baseUrl": "https://anizone.to",
-  "domains": [
-    { "name": "anizone.to", "url": "https://anizone.to" }
-  ],
   "description": "AniZone - Anime Streaming with Multi-Language Softsubs",
   "authors": [
     "arranoust"
