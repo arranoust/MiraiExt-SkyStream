@@ -1,5 +1,22 @@
 [
   {
+    "packageName": "com.arranoust.animeonsen",
+    "name": "AnimeOnsen",
+    "version": 1,
+    "baseUrl": "https://www.animeonsen.xyz",
+    "description": "AnimeOnsen - Multi-language anime streaming with softsubs",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "en"
+    ],
+    "categories": [
+      "Anime"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.animeonsen.sky"
+  },
+  {
     "packageName": "com.arranoust.animexin",
     "name": "AnimeXin",
     "version": 1,
