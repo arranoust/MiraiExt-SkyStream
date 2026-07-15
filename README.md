@@ -42,11 +42,12 @@ https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json
 ---
 
 <details>
-<summary><h2> 📦 Available Extensions </h2></summary>
+<summary><h2> 📦 Available Extensions (Click Here) </h2></summary>
 
 | Extension | Region | Content Type |
 | :--- | :--- | :--- |
 | **AnimeXin** | EN | Donghua |
+| **AnimeOnsen** | EN | Anime |
 | **Anizone** | EN | Anime |
 | **Idlix** | ID | Movies & Series |
 | **LayarKaca** | ID | Movies & Series |
