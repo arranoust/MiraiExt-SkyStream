@@ -35,6 +35,53 @@
         } catch (_) { return []; }
     }
 
+    // ─── HLS variant parser ───────────────────────────────────────────────────
+    function resolveUrl(base, relative) {
+        if (!relative) return base;
+        if (relative.indexOf('http') === 0) return relative;
+        if (relative.indexOf('//') === 0) return 'https:' + relative;
+        if (relative.indexOf('/') === 0) {
+            var end = base.indexOf('://') + 3;
+            var hostEnd = base.indexOf('/', end);
+            if (hostEnd === -1) hostEnd = base.length;
+            return base.slice(0, hostEnd) + relative;
+        }
+        var slash = base.lastIndexOf('/');
+        return (slash > 8 ? base.slice(0, slash + 1) : base + '/') + relative;
+    }
+
+    function parseHlsVariants(content, baseUrl) {
+        if (!content || content.indexOf('#EXTM3U') === -1) return null;
+        var variants = [];
+        var lines = content.split('\n');
+        var inf = null;
+        var hasStreamInf = false;
+
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (line.indexOf('#EXT-X-STREAM-INF') === 0) {
+                hasStreamInf = true;
+                var resM = line.match(/RESOLUTION=(\d+)x(\d+)/);
+                var bwM  = line.match(/[^-]BANDWIDTH=(\d+)\b/);
+                inf = {
+                    height:    resM ? parseInt(resM[2], 10) : 0,
+                    bandwidth: bwM  ? parseInt(bwM[1], 10)  : 0
+                };
+            } else if (line.indexOf('#') === 0 || line.length === 0) {
+                continue;
+            } else if (inf) {
+                var vUrl = line.indexOf('http') === 0 ? line : resolveUrl(baseUrl, line);
+                var h = inf.height;
+                var label = h >= 2160 ? '4K' : h >= 1080 ? '1080p' : h >= 720 ? '720p' : h >= 480 ? '480p' : h >= 360 ? '360p' : (h ? h + 'p' : 'Auto');
+                variants.push({ url: vUrl, height: h, bandwidth: inf.bandwidth, label: label });
+                inf = null;
+            }
+        }
+
+        variants.sort(function (a, b) { return b.height - a.height; });
+        return variants.length > 0 && hasStreamInf ? variants : null;
+    }
+
     // ─── Title parsing ────────────────────────────────────────────────────────
     function parseAnmTitles(raw) {
         var s = raw.replace(/\\u0022/g, '"');
@@ -47,31 +94,20 @@
         if (!str) return '';
         return str
             .replace(/\\u([0-9a-fA-F]{4})/g, function (_, hex) { return String.fromCharCode(parseInt(hex, 16)); })
-            .replace(/\\\//g, '/')
-            .replace(/\\'/g, "'")
-            .replace(/\\"/g, '"')
-            .replace(/^"+|"+$/g, '')
-            .trim();
+            .replace(/\\\//g, '/').replace(/\\'/g, "'").replace(/\\"/g, '"')
+            .replace(/^"+|"+$/g, '').trim();
     }
 
     function pickTitle(titles) {
         if (!titles || typeof titles !== 'object') return '';
         var t = titles['1'] || titles['2'] || titles['5'] || titles['10'];
-        if (!t) {
-            var keys = Object.keys(titles);
-            for (var i = 0; i < keys.length; i++) {
-                if (titles[keys[i]]) { t = titles[keys[i]]; break; }
-            }
-        }
+        if (!t) { var keys = Object.keys(titles); for (var i = 0; i < keys.length; i++) { if (titles[keys[i]]) { t = titles[keys[i]]; break; } } }
         return decodeTitle(t);
     }
 
     function extractTitle(block) {
         var m = block.match(/anmTitles:\s*JSON\.parse\('([\s\S]+?)'\)/);
-        if (m) {
-            var parsed = parseAnmTitles(m[1]);
-            if (parsed) return pickTitle(parsed);
-        }
+        if (m) { var p = parseAnmTitles(m[1]); if (p) return pickTitle(p); }
         var fb = block.match(/window\.getTitle\s*\([^,)]+,\s*'([^']+)'\s*\)/);
         if (fb) return decodeTitle(fb[1].replace(/&quot;/g, '"'));
         return '';
@@ -85,13 +121,11 @@
         var tokenMatch = html.match(/<script[^>]+data-csrf="([^"]+)"/);
         if (!tokenMatch) return null;
 
-        // Grab session cookie
         var cookie = '';
         var raw = res.headers && (res.headers['set-cookie'] || res.headers['Set-Cookie']);
         if (Array.isArray(raw)) cookie = raw.map(function (c) { return c.split(';')[0]; }).join('; ');
         else if (typeof raw === 'string') cookie = raw.split(';')[0];
 
-        // Find pages.anime-index snapshot
         var snapshots = [];
         var re = /wire:snapshot="([^"]+)"/g;
         var m;
@@ -102,10 +136,6 @@
                 if (parsed?.memo?.name) snapshots.push({ name: parsed.memo.name, snap });
             } catch (_) {}
         }
-
-        // Also try main div selector
-        var mainSnap = html.match(/<main[^>]+wire:snapshot="([^"]+)"/i)
-                    || html.match(/<div[^>]+wire:id="[^"]*"[^>]+wire:snapshot="([^"]+)"/i);
 
         var target = snapshots.find(function (s) { return s.name === 'pages.anime-index'; })
                   || snapshots.find(function (s) { return /anime.index|anime-index/i.test(s.name); })
@@ -120,7 +150,6 @@
             _token:     wire.token,
             components: [{ snapshot: wire.snapshot, updates: updates, calls: calls || [] }]
         });
-
         var headers = {
             'User-Agent':   UA,
             'Content-Type': 'application/json',
@@ -135,11 +164,8 @@
         var json = JSON.parse(res);
         var comp = json.components[0];
         wire.snapshot = comp.snapshot;
-
-        // Merge any new cookies
         var newCookie = json.components[0]?.effects?.xdata?.cookie;
         if (newCookie) wire.cookie = newCookie;
-
         return comp.effects.html;
     }
 
@@ -327,13 +353,32 @@
                 return acc;
             }, []);
 
+            var m3u8Body = '';
+            try { m3u8Body = getBody(await http_get(m3u8Url, { ...HEADERS, Referer: manifest.baseUrl + '/' })); } catch (_) {}
+
+            var variants = m3u8Body ? parseHlsVariants(m3u8Body, m3u8Url) : null;
+
+            if (variants && variants.length > 1) {
+                var streams = variants.map(function (v) {
+                    return new StreamResult({
+                        url:       v.url,
+                        quality:   v.label,
+                        source:    'AniZone | ' + v.label,
+                        headers:   { Referer: manifest.baseUrl + '/' },
+                        subtitles: subtitles.length ? subtitles : undefined
+                    });
+                });
+                return cb({ success: true, data: streams });
+            }
+
             cb({
                 success: true,
                 data: [new StreamResult({
                     url:       m3u8Url,
-                    quality:   'Multi Quality',
+                    quality:   variants && variants[0] ? variants[0].label : 'Auto',
+                    source:    'AniZone',
                     headers:   { Referer: manifest.baseUrl + '/' },
-                    subtitles
+                    subtitles: subtitles.length ? subtitles : undefined
                 })]
             });
         } catch (e) { cb({ success: false, error: String(e) }); }
