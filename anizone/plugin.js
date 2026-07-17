@@ -50,36 +50,59 @@
         return (slash > 8 ? base.slice(0, slash + 1) : base + '/') + relative;
     }
 
-    function parseHlsVariants(content, baseUrl) {
+    // Returns { variants: [{url, height, bandwidth, label, infLine}], mediaLines: string[] }
+    // mediaLines: resolved #EXT-X-MEDIA lines (audio/subtitles groups)
+    // infLine: original #EXT-X-STREAM-INF line (preserved for mini-master reconstruction)
+    function parseHlsMaster(content, baseUrl) {
         if (!content || content.indexOf('#EXTM3U') === -1) return null;
-        var variants = [];
+        var variants  = [];
+        var mediaLines = [];
         var lines = content.split('\n');
-        var inf = null;
+        var inf   = null;
         var hasStreamInf = false;
 
         for (var i = 0; i < lines.length; i++) {
             var line = lines[i].trim();
-            if (line.indexOf('#EXT-X-STREAM-INF') === 0) {
+            if (!line) continue;
+
+            if (line.indexOf('#EXT-X-MEDIA') === 0) {
+                // Resolve URI= in the media line to absolute URL
+                var resolved = line.replace(/URI="([^"]+)"/, function (_, uri) {
+                    return 'URI="' + resolveUrl(baseUrl, uri) + '"';
+                });
+                mediaLines.push(resolved);
+            } else if (line.indexOf('#EXT-X-STREAM-INF') === 0) {
                 hasStreamInf = true;
                 var resM = line.match(/RESOLUTION=(\d+)x(\d+)/);
                 var bwM  = line.match(/[^-]BANDWIDTH=(\d+)\b/);
                 inf = {
                     height:    resM ? parseInt(resM[2], 10) : 0,
-                    bandwidth: bwM  ? parseInt(bwM[1], 10)  : 0
+                    bandwidth: bwM  ? parseInt(bwM[1], 10)  : 0,
+                    infLine:   line
                 };
-            } else if (line.indexOf('#') === 0 || line.length === 0) {
+            } else if (line.indexOf('#') === 0) {
                 continue;
             } else if (inf) {
                 var vUrl = line.indexOf('http') === 0 ? line : resolveUrl(baseUrl, line);
-                var h = inf.height;
+                var h    = inf.height;
                 var label = h >= 2160 ? '4K' : h >= 1080 ? '1080p' : h >= 720 ? '720p' : h >= 480 ? '480p' : h >= 360 ? '360p' : (h ? h + 'p' : 'Auto');
-                variants.push({ url: vUrl, height: h, bandwidth: inf.bandwidth, label: label });
+                variants.push({ url: vUrl, height: h, bandwidth: inf.bandwidth, label: label, infLine: inf.infLine });
                 inf = null;
             }
         }
 
         variants.sort(function (a, b) { return b.height - a.height; });
-        return variants.length > 0 && hasStreamInf ? variants : null;
+        return variants.length > 0 && hasStreamInf ? { variants, mediaLines } : null;
+    }
+
+    // Reconstruct a mini master playlist for a single variant that includes audio groups.
+    // Served via magic_m3u8 so the player gets both video + audio tracks.
+    function buildMiniMaster(variant, mediaLines) {
+        var lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
+        mediaLines.forEach(function (l) { lines.push(l); });
+        lines.push(variant.infLine);
+        lines.push(variant.url);
+        return 'magic_m3u8:' + btoa(lines.join('\n'));
     }
 
     // ─── Title parsing ────────────────────────────────────────────────────────
@@ -356,12 +379,13 @@
             var m3u8Body = '';
             try { m3u8Body = getBody(await http_get(m3u8Url, { ...HEADERS, Referer: manifest.baseUrl + '/' })); } catch (_) {}
 
-            var variants = m3u8Body ? parseHlsVariants(m3u8Body, m3u8Url) : null;
+            var master = m3u8Body ? parseHlsMaster(m3u8Body, m3u8Url) : null;
 
-            if (variants && variants.length > 1) {
-                var streams = variants.map(function (v) {
+            if (master && master.variants.length > 1) {
+                var streams = master.variants.map(function (v) {
+                    var url = master.mediaLines.length ? buildMiniMaster(v, master.mediaLines) : v.url;
                     return new StreamResult({
-                        url:       v.url,
+                        url:       url,
                         quality:   v.label,
                         source:    'AniZone | ' + v.label,
                         headers:   { Referer: manifest.baseUrl + '/' },
@@ -375,7 +399,7 @@
                 success: true,
                 data: [new StreamResult({
                     url:       m3u8Url,
-                    quality:   variants && variants[0] ? variants[0].label : 'Auto',
+                    quality:   master && master.variants[0] ? master.variants[0].label : 'Auto',
                     source:    'AniZone',
                     headers:   { Referer: manifest.baseUrl + '/' },
                     subtitles: subtitles.length ? subtitles : undefined
