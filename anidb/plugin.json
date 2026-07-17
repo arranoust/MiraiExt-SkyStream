@@ -1,0 +1,10 @@
+{
+  "packageName": "com.arranoust.anidb",
+  "name": "AniDB",
+  "version": 1,
+  "baseUrl": "https://anidb.app",
+  "description": "AniDB - Stream thousands of anime series and movies online for free in HD quality",
+  "authors": ["arranoust"],
+  "languages": ["en"],
+  "categories": ["Anime"]
+}
