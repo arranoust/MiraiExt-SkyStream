@@ -209,7 +209,8 @@
                 posterUrl:  epPoster,
                 description: epDesc,
                 airDate:    epAir ? epAir.substring(0, 10) : '',
-                dubStatus:  dubStatus || 'none'
+                dubStatus:  dubStatus || 'none',
+                headers:    HTML_HDR
             }));
         }
 
@@ -278,7 +279,11 @@
             var status = statusM ? decodeURIComponent(statusM[1]) : '';
             var mappedStatus = status.includes('Currently') ? 'ongoing' : status.includes('Finished') ? 'completed' : undefined;
 
-            var isMovie = /browse\?type=Movie/i.test(html);
+            var typeM = html.match(/<dt[^>]*>Type<\/dt>\s*<dd><a href="\/browse\?type=([^"]+)"/i);
+            var rawType = typeM ? typeM[1] : '';
+            var mappedType = rawType === 'Movie' ? 'movie'
+                           : rawType === 'OVA' || rawType === 'ONA' || rawType === 'Special' || rawType === 'Music' ? 'anime'
+                           : 'series';
 
             var trailerM = html.match(/href="(https?:\/\/(?:www\.)?youtube\.com\/watch[^"]+)"/i);
             var trailerUrl = trailerM ? trailerM[1] : null;
@@ -332,7 +337,7 @@
                     title:      title,
                     url:        url,
                     posterUrl:  poster,
-                    type:       isMovie ? 'movie' : 'anime',
+                    type:       mappedType,
                     description: desc,
                     year:       year,
                     score:      score,
@@ -340,7 +345,8 @@
                     tags:       tags,
                     trailers:   trailerUrl ? [new Trailer({ url: trailerUrl })] : [],
                     syncData:   Object.keys(syncData).length ? syncData : undefined,
-                    episodes:   episodes
+                    episodes:   episodes,
+                    headers:    HTML_HDR
                 })
             });
         } catch (e) { cb({ success: false, error: String(e) }); }
