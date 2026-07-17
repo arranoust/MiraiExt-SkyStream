@@ -46,6 +46,7 @@ https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json
 
 | Extension | Region | Content Type |
 | :--- | :--- | :--- |
+| **AniDB** | EN | Anime |
 | **AnimeXin** | EN | Donghua |
 | **AnimeOnsen** | EN | Anime |
 | **Anizone** | EN | Anime |
