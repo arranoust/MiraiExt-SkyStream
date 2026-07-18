@@ -6,7 +6,10 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://www.android.com)
 [![Commits](https://img.shields.io/github/commit-activity/m/arranoust/MiraiExt-SkyStream?style=for-the-badge&logo=github)](https://github.com/arranoust/MiraiExt-SkyStream/commits/main)
-[![Telegram Channel](https://img.shields.io/badge/Telegram-Channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/arranschannel)
+
+**📌 Community**
+
+[![Telegram Group](https://img.shields.io/badge/Telegram-Group-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/arransdiscussion)
 
 <br>
 
