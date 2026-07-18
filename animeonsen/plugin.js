@@ -1,14 +1,15 @@
 (function () {
 
     // ─── Config ───────────────────────────────────────────────────────────────
-    var BASE_URL   = 'https://www.animeonsen.xyz';
-    var API_URL    = 'https://api.animeonsen.xyz/v4';
-    var SEARCH_URL = 'https://search.animeonsen.xyz';
+    var BASE_URL   = manifest.baseUrl;
+    var HOSTNAME   = (function () { try { return new URL(BASE_URL).hostname.replace(/^www\./, ''); } catch (_) { return 'animeonsen.xyz'; } })();
+    var API_URL    = 'https://api.' + HOSTNAME + '/v4';
+    var SEARCH_URL = 'https://search.' + HOSTNAME;
+    var TOKEN_URL  = 'https://auth.' + HOSTNAME + '/oauth/token';
 
     // OAuth2 client credentials (from AOAPIInterceptor.kt)
     var CLIENT_ID     = 'f296be26-28b5-4358-b5a1-6259575e23b7';
     var CLIENT_SECRET = '349038c4157d0480784753841217270c3c5b35f4281eaee029de21cb04084235';
-    var TOKEN_URL     = 'https://auth.animeonsen.xyz/oauth/token';
 
     var UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.3';
 
@@ -22,10 +23,12 @@
 
     // ─── Token cache ──────────────────────────────────────────────────────────
     var _token         = null;
+    var _tokenExpiry   = 0;
     var _searchToken   = null;
 
     async function getApiToken() {
-        if (_token) return _token;
+        if (_token && Date.now() < _tokenExpiry) return _token;
+        _token = null;
         try {
             var body = 'client_id=' + encodeURIComponent(CLIENT_ID)
                      + '&client_secret=' + encodeURIComponent(CLIENT_SECRET)
@@ -39,7 +42,9 @@
             }, body);
             var json = JSON.parse(getBody(res));
             _token = json.access_token || null;
-        } catch (_) { _token = null; }
+            var expiresIn = json.expires_in || 3600;
+            _tokenExpiry = Date.now() + ((expiresIn - 300) * 1000);
+        } catch (_) { _token = null; _tokenExpiry = 0; }
         return _token;
     }
 
@@ -59,7 +64,8 @@
         var token = await getApiToken();
         var hdrs  = Object.assign({}, HEADERS);
         if (token) hdrs['Authorization'] = 'Bearer ' + token;
-        return JSON.parse(getBody(await http_get(API_URL + path, hdrs)));
+        var res = await http_get(API_URL + path, hdrs);
+        return JSON.parse(getBody(res));
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -87,7 +93,7 @@
         try {
             var json   = await apiGet('/content/index?start=0&limit=30');
             var items  = (json.content || []).map(itemToMultimedia);
-            if (!items.length) return cb({ success: false, error: 'No content found.' });
+            if (!items.length) return cb({ success: false, error: 'Tidak ada konten ditemukan.' });
             cb({ success: true, data: { 'Popular': items } });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -125,7 +131,6 @@
             var poster   = posterUrl(contentId);
             var malData  = (typeof detail.mal_data === 'object' && detail.mal_data) ? detail.mal_data : {};
 
-            // Build description
             var desc = '';
             if (malData.mean_score) {
                 var stars = Math.round(malData.mean_score / 2);
@@ -140,7 +145,6 @@
             if (detail.mal_id)  extras.push('MAL ID: ' + detail.mal_id);
             if (extras.length)  desc += '\n\n' + extras.join('\n');
 
-            // Fetch episode list
             var epsJson  = await apiGet('/content/' + contentId + '/episodes');
             var episodes = [];
             var epKeys   = Object.keys(epsJson).sort(function (a, b) { return parseFloat(a) - parseFloat(b); });
@@ -179,13 +183,11 @@
     // ─── loadStreams ───────────────────────────────────────────────────────────
     async function loadStreams(url, cb) {
         try {
-            // url = "{contentId}/video/{epNum}"
             var videoData = await apiGet('/content/' + url);
 
-            var m3u8      = videoData.uri && videoData.uri.stream;
-            if (!m3u8) return cb({ success: false, error: 'Stream URL not found.' });
+            var m3u8 = videoData.uri && videoData.uri.stream;
+            if (!m3u8) return cb({ success: false, error: 'Stream URL tidak ditemukan.' });
 
-            // Build subtitles: langPrefix → display name from metadata
             var subtitleMeta = (videoData.metadata && videoData.metadata.subtitles) || {};
             var subtitleUris = (videoData.uri && videoData.uri.subtitles) || {};
 
@@ -195,7 +197,6 @@
                 return acc;
             }, []);
 
-            // Sort: English first, then alphabetical
             subtitles.sort(function (a, b) {
                 if (a.lang === 'en-US') return -1;
                 if (b.lang === 'en-US') return 1;

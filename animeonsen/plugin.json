@@ -1,7 +1,7 @@
 {
   "packageName": "com.arranoust.animeonsen",
   "name": "AnimeOnsen",
-  "version": 1,
+  "version": 2,
   "baseUrl": "https://www.animeonsen.xyz",
   "description": "AnimeOnsen - Multi-language anime streaming with softsubs",
   "authors": ["arranoust"],
