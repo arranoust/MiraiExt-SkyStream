@@ -2,7 +2,7 @@
   {
     "packageName": "com.arranoust.anidb",
     "name": "AniDB",
-    "version": 2,
+    "version": 3,
     "baseUrl": "https://anidb.app",
     "description": "AniDB - Stream thousands of anime series and movies online for free in HD quality",
     "authors": [
@@ -36,7 +36,7 @@
   {
     "packageName": "com.arranoust.animexin",
     "name": "AnimeXin",
-    "version": 1,
+    "version": 2,
     "baseUrl": "https://animexin.dev",
     "description": "AnimeXin - Streaming Donghua with Subtitles",
     "authors": [
@@ -54,7 +54,7 @@
   {
     "packageName": "com.arranoust.anizone",
     "name": "AniZone",
-    "version": 10,
+    "version": 11,
     "baseUrl": "https://anizone.to",
     "description": "AniZone - Anime Streaming with Multi-Language Softsubs",
     "authors": [
@@ -113,7 +113,7 @@
   {
     "packageName": "com.arranoust.otakudesu",
     "name": "OtakuDesu",
-    "version": 7,
+    "version": 8,
     "baseUrl": "https://otakudesu.blog",
     "description": "OtakuDesu - Streaming Anime Subtitle Indonesia",
     "authors": [
@@ -130,7 +130,7 @@
   {
     "packageName": "com.arranoust.samehadaku",
     "name": "Samehadaku",
-    "version": 10,
+    "version": 11,
     "baseUrl": "https://v2.samehadaku.how",
     "description": "Samehadaku - Nonton Anime Subtitle Indonesia Terbaru dengan Kualitas Video HD Terlengkap",
     "authors": [
