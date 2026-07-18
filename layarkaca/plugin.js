@@ -4,7 +4,12 @@
     // manifest.baseUrl is injected per active domain from plugin.json `domains`.
     // SERIES_URL must be declared in plugin.json as a second domain entry.
     var BASE_URL   = manifest.baseUrl;
-    var SERIES_URL = 'https://series.lk21.de'; // kept as fallback; add to domains[] in plugin.json
+    var SERIES_URL = (function () {
+        try {
+            var host = new URL(BASE_URL).hostname;
+            return BASE_URL.replace(host, 'series.' + host);
+        } catch (_) { return 'https://series.lk21.de'; }
+    })();
     var UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
     var HTML_HDR   = { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' };
     var PLAYER_HDR = { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', Referer: 'https://playeriframe.sbs/' };

@@ -6,7 +6,6 @@
     var ANILIST_API = 'https://graphql.anilist.co';
     var ANI_ZIP     = 'https://api.ani.zip/mappings';
     var MEDIA_LIMIT = 20;
-    var MIN_SEEDERS = 5; 
 
     var TRACKERS = [
         'udp://tracker.opentrackr.org:1337/announce',
@@ -98,10 +97,36 @@
         });
     }
 
+    function buildStreams(res) {
+        var streams    = [];
+        var seedersMap = {};
+        res.streams.forEach(function(s) {
+            var source   = buildStreamLabel(s.title || '', s.name || '');
+            var quality  = getQuality(s.title || s.name || '');
+            var seeders  = extractSeeders(s.title || '');
+            var streamUrl;
+            if (s.infoHash) {
+                streamUrl = buildMagnet(s.infoHash, s.name);
+            } else if (s.url) {
+                streamUrl = s.url;
+            } else {
+                return;
+            }
+            streams.push(new StreamResult({
+                url:     streamUrl,
+                quality: quality,
+                source:  source,
+                headers: {}
+            }));
+            seedersMap[streamUrl] = seeders;
+        });
+        return { streams: streams, seedersMap: seedersMap };
+    }
+
     var isAnimeProvider = manifest.baseUrl.indexOf('nyaasi') !== -1;
 
     // ─────────────────────────────────────────────────────────────────────────
-    // TORRENTIO 
+    // TORRENTIO
     // ─────────────────────────────────────────────────────────────────────────
 
     async function torrentioGetHome(cb) {
@@ -121,11 +146,10 @@
             { name: 'Korean Shows',     url: TMDB_API + '/discover/tv?api_key=' + TMDB_KEY + '&with_original_language=ko' }
         ];
         try {
-            var result = {};
-            for (var i = 0; i < categories.length; i++) {
-                try {
-                    var json = parseJSON(await http_get(categories[i].url, HTML_HEADERS));
-                    if (!json || !json.results) continue;
+            var results = await Promise.all(categories.map(function(cat) {
+                return http_get(cat.url, HTML_HEADERS).then(function(res) {
+                    var json = parseJSON(res);
+                    if (!json || !json.results) return { name: cat.name, items: [] };
                     var items = json.results.map(function(m) {
                         return new MultimediaItem({
                             title:          (m.title || m.name || 'Unknown').trim(),
@@ -136,10 +160,16 @@
                             playbackPolicy: 'torrent'
                         });
                     });
-                    if (items.length) result[categories[i].name] = items;
-                } catch (_) {}
-            }
-            if (!Object.keys(result).length) return cb({ success: false, error: 'Gagal memuat homepage.' });
+                    return { name: cat.name, items: items };
+                }).catch(function() {
+                    return { name: cat.name, items: [] };
+                });
+            }));
+            var result = {};
+            results.forEach(function(r) {
+                if (r.items.length) result[r.name] = r.items;
+            });
+            if (!Object.keys(result).length) return cb({ success: false, error: 'Gagal memuat homepage dari TMDB. Kemungkinan API key expired atau rate-limited.' });
             cb({ success: true, data: result });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -177,7 +207,7 @@
                 TMDB_API + '/' + tmdbType + '/' + tmdbId + '?api_key=' + TMDB_KEY + '&append_to_response=credits,external_ids,videos,recommendations,keywords',
                 HTML_HEADERS
             ));
-            if (!res) return cb({ success: false, error: 'Gagal memuat detail.' });
+            if (!res) return cb({ success: false, error: 'Gagal memuat detail dari TMDB.' });
 
             var title    = res.title || res.name || 'Unknown';
             var poster   = imgUrl(res.poster_path);
@@ -238,19 +268,19 @@
                     })
                 });
             } else {
-                var episodes = [];
-                var seasons  = res.seasons || [];
-                for (var si = 0; si < seasons.length; si++) {
-                    var s = seasons[si];
-                    if (!s.season_number || s.season_number === 0) continue;
-                    try {
-                        var seasonRes = parseJSON(await http_get(
-                            TMDB_API + '/tv/' + tmdbId + '/season/' + s.season_number + '?api_key=' + TMDB_KEY,
-                            HTML_HEADERS
-                        ));
-                        if (!seasonRes || !seasonRes.episodes) continue;
-                        seasonRes.episodes.forEach(function(ep) {
-                            episodes.push(new Episode({
+                var seasons = (res.seasons || []).filter(function(s) {
+                    return s.season_number && s.season_number !== 0;
+                });
+
+                var seasonResults = await Promise.all(seasons.map(function(s) {
+                    return http_get(
+                        TMDB_API + '/tv/' + tmdbId + '/season/' + s.season_number + '?api_key=' + TMDB_KEY,
+                        HTML_HEADERS
+                    ).then(function(res) {
+                        var seasonRes = parseJSON(res);
+                        if (!seasonRes || !seasonRes.episodes) return [];
+                        return seasonRes.episodes.map(function(ep) {
+                            return new Episode({
                                 name:           ep.name || ('Episode ' + ep.episode_number),
                                 url:            JSON.stringify({ type: 'tv', imdbId: imdbId, title: title, year: year, season: ep.season_number, episode: ep.episode_number, isAnime: isAnime }),
                                 season:         ep.season_number,
@@ -260,10 +290,19 @@
                                 airDate:        ep.air_date || '',
                                 runtime:        ep.runtime || undefined,
                                 playbackPolicy: 'torrent'
-                            }));
+                            });
                         });
-                    } catch (_) {}
-                }
+                    }).catch(function() {
+                        console.error('Torrentio: gagal memuat season ' + s.season_number + ' untuk ' + title);
+                        return [];
+                    });
+                }));
+
+                var episodes = [];
+                seasonResults.forEach(function(epList) {
+                    episodes = episodes.concat(epList);
+                });
+
                 cb({
                     success: true,
                     data: new MultimediaItem({
@@ -292,7 +331,7 @@
             var imdbId  = data.imdbId;
             var isMovie = data.type === 'movie';
 
-            if (!imdbId) return cb({ success: false, error: 'IMDB ID tidak tersedia untuk konten ini. Torrentio membutuhkan IMDB ID.' });
+            if (!imdbId) return cb({ success: false, error: 'IMDB ID tidak tersedia. Torrentio membutuhkan IMDB ID untuk mencari stream.' });
 
             var endpoint = isMovie
                 ? manifest.baseUrl + '/stream/movie/' + imdbId + '.json'
@@ -302,35 +341,9 @@
             if (!res || !res.streams || !res.streams.length)
                 return cb({ success: false, error: 'Tidak ada stream ditemukan di Torrentio untuk konten ini.' });
 
-            var streams    = [];
-            var seedersMap = {};
-
-            res.streams.forEach(function(s) {
-                var source   = buildStreamLabel(s.title || '', s.name || '');
-                var quality  = getQuality(s.title || s.name || '');
-                var seeders  = extractSeeders(s.title || '');
-                var streamUrl;
-
-                if (s.infoHash) {
-                    streamUrl = buildMagnet(s.infoHash, s.name);
-                } else if (s.url) {
-                    streamUrl = s.url;
-                } else {
-                    return;
-                }
-
-                streams.push(new StreamResult({
-                    url:     streamUrl,
-                    quality: quality,
-                    source:  source,
-                    headers: {}
-                }));
-                seedersMap[streamUrl] = seeders;
-            });
-
-            if (!streams.length) return cb({ success: false, error: 'Tidak ada stream tersedia.' });
-
-            cb({ success: true, data: sortStreams(streams, seedersMap) });
+            var built = buildStreams(res);
+            if (!built.streams.length) return cb({ success: false, error: 'Tidak ada stream tersedia.' });
+            cb({ success: true, data: sortStreams(built.streams, built.seedersMap) });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
@@ -359,16 +372,20 @@
             { name: 'Top 100 Anime',       query: 'query($p:Int=1){Page(page:$p,perPage:' + MEDIA_LIMIT + '){media(sort:[SCORE_DESC],isAdult:false,type:ANIME){id averageScore title{english romaji}coverImage{extraLarge large medium}}}}' }
         ];
         try {
-            var result = {};
-            for (var i = 0; i < sections.length; i++) {
-                try {
-                    var json  = await anilistQuery(sections[i].query);
+            var results = await Promise.all(sections.map(function(sec) {
+                return anilistQuery(sec.query).then(function(json) {
                     var media = json && json.data && json.data.Page && json.data.Page.media;
-                    if (!media || !media.length) continue;
-                    result[sections[i].name] = media.map(aniMediaToItem);
-                } catch (_) {}
-            }
-            if (!Object.keys(result).length) return cb({ success: false, error: 'Gagal memuat homepage.' });
+                    if (!media || !media.length) return { name: sec.name, items: [] };
+                    return { name: sec.name, items: media.map(aniMediaToItem) };
+                }).catch(function() {
+                    return { name: sec.name, items: [] };
+                });
+            }));
+            var result = {};
+            results.forEach(function(r) {
+                if (r.items.length) result[r.name] = r.items;
+            });
+            if (!Object.keys(result).length) return cb({ success: false, error: 'Gagal memuat homepage anime dari AniList.' });
             cb({ success: true, data: result });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -388,7 +405,7 @@
             var q = 'query($id:Int){Media(id:$id,type:ANIME){id idMal title{romaji english}startDate{year}genres description averageScore status bannerImage coverImage{extraLarge large medium}episodes format nextAiringEpisode{episode}airingSchedule{nodes{episode}}recommendations{edges{node{id mediaRecommendation{id title{romaji english}coverImage{extraLarge large medium}}}}}}}';
             var json = await anilistQuery(q, { id: parseInt(anilistId) });
             var data = json && json.data && json.data.Media;
-            if (!data) return cb({ success: false, error: 'Gagal memuat detail anime.' });
+            if (!data) return cb({ success: false, error: 'Gagal memuat detail anime dari AniList.' });
 
             var title       = (data.title && (data.title.english || data.title.romaji)) || 'Unknown';
             var poster      = (data.coverImage && (data.coverImage.extraLarge || data.coverImage.large)) || '';
@@ -477,47 +494,20 @@
         try {
             var data    = JSON.parse(url);
             var kitsuId = data.kitsuId;
-            var episode = data.episode || 1;
             var isMovie = data.type === 'movie';
-            if (!kitsuId) return cb({ success: false, error: 'Kitsu ID tidak ditemukan untuk anime ini.' });
+            if (!kitsuId) return cb({ success: false, error: 'Kitsu ID tidak ditemukan. Anime ini tidak memiliki mapping ke Kitsu.' });
 
             var endpoint = isMovie
                 ? manifest.baseUrl + '/stream/movie/kitsu:' + kitsuId + '.json'
-                : manifest.baseUrl + '/stream/series/kitsu:' + kitsuId + ':' + episode + '.json';
+                : manifest.baseUrl + '/stream/series/kitsu:' + kitsuId + ':' + (data.episode || 1) + '.json';
 
             var res = parseJSON(await http_get(endpoint, HTML_HEADERS));
             if (!res || !res.streams || !res.streams.length)
-                return cb({ success: false, error: 'Tidak ada stream ditemukan.' });
+                return cb({ success: false, error: 'Tidak ada stream ditemukan di Torrentio untuk anime ini.' });
 
-            var streams    = [];
-            var seedersMap = {};
-
-            res.streams.forEach(function(s) {
-                var source   = buildStreamLabel(s.title || '', s.name || '');
-                var quality  = getQuality(s.title || s.name || '');
-                var seeders  = extractSeeders(s.title || '');
-                var streamUrl;
-
-                if (s.infoHash) {
-                    streamUrl = buildMagnet(s.infoHash, s.name);
-                } else if (s.url) {
-                    streamUrl = s.url;
-                } else {
-                    return;
-                }
-
-                streams.push(new StreamResult({
-                    url:     streamUrl,
-                    quality: quality,
-                    source:  source,
-                    headers: {}
-                }));
-                seedersMap[streamUrl] = seeders;
-            });
-
-            if (!streams.length) return cb({ success: false, error: 'Tidak ada stream tersedia.' });
-
-            cb({ success: true, data: sortStreams(streams, seedersMap) });
+            var built = buildStreams(res);
+            if (!built.streams.length) return cb({ success: false, error: 'Tidak ada stream tersedia.' });
+            cb({ success: true, data: sortStreams(built.streams, built.seedersMap) });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
 
