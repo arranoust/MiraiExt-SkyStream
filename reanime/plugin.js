@@ -80,6 +80,112 @@
             String(dt.getDate()).padStart(2, '0');
     }
 
+    // ─── HLS helpers ───────────────────────────────────────────────────────
+    function resolveUrl(base, relative) {
+        if (!relative) return base;
+        if (relative.indexOf('http') === 0) return relative;
+        if (relative.indexOf('//') === 0) return 'https:' + relative;
+        if (relative.indexOf('/') === 0) {
+            var end = base.indexOf('://') + 3;
+            var hostEnd = base.indexOf('/', end);
+            if (hostEnd === -1) hostEnd = base.length;
+            return base.slice(0, hostEnd) + relative;
+        }
+        var slash = base.lastIndexOf('/');
+        return (slash > 8 ? base.slice(0, slash + 1) : base + '/') + relative;
+    }
+
+    // Parse a master m3u8 into { variants, mediaLines }.
+    // mediaLines: #EXT-X-MEDIA lines with URIs resolved to absolute.
+    // infLine: original #EXT-X-STREAM-INF line preserved for reconstruction.
+    function parseHlsMaster(content, baseUrl) {
+        if (!content || content.indexOf('#EXTM3U') === -1) return null;
+        var variants  = [];
+        var mediaLines = [];
+        var lines = content.split('\n');
+        var inf   = null;
+
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line) continue;
+
+            if (line.indexOf('#EXT-X-MEDIA') === 0) {
+                var resolved = line.replace(/URI="([^"]+)"/, function (_, uri) {
+                    return 'URI="' + resolveUrl(baseUrl, uri) + '"';
+                });
+                mediaLines.push(resolved);
+            } else if (line.indexOf('#EXT-X-STREAM-INF') === 0) {
+                var resM = line.match(/RESOLUTION=(\d+)x(\d+)/);
+                var bwM  = line.match(/[^-]BANDWIDTH=(\d+)\b/);
+                inf = {
+                    height:    resM ? parseInt(resM[2], 10) : 0,
+                    bandwidth: bwM  ? parseInt(bwM[1], 10)  : 0,
+                    infLine:   line
+                };
+            } else if (line.indexOf('#') === 0) {
+                continue;
+            } else if (inf) {
+                var vUrl = resolveUrl(baseUrl, line);
+                variants.push({
+                    url:       vUrl,
+                    height:    inf.height,
+                    bandwidth: inf.bandwidth,
+                    infLine:   inf.infLine
+                });
+                inf = null;
+            }
+        }
+
+        variants.sort(function (a, b) { return b.height - a.height; });
+        return variants.length > 0 ? { variants: variants, mediaLines: mediaLines } : null;
+    }
+
+    // Reconstruct a mini master playlist for a single variant that includes audio groups.
+    function buildMiniMaster(variant, mediaLines) {
+        var l = ['#EXTM3U', '#EXT-X-VERSION:3'];
+        mediaLines.forEach(function (ml) { l.push(ml); });
+        l.push(variant.infLine);
+        l.push(variant.url);
+        return 'magic_m3u8:' + btoa(l.join('\n'));
+    }
+
+    // Rewrite an m3u8 playlist: make all URLs absolute and wrap with MAGIC_PROXY.
+    // Handles variant URLs, segment URLs, and #EXT-X-MEDIA URIs.
+    function proxyM3u8Content(content, baseUrl) {
+        var out = [];
+        var pendingInf = null;
+
+        for (var i = 0; i < content.length; i++) {
+            var line = content[i];
+
+            // Proxy URI= in #EXT-X-MEDIA tags
+            if (line.indexOf('#EXT-X-MEDIA') === 0) {
+                line = line.replace(/URI="([^"]+)"/, function (_, uri) {
+                    var abs = resolveUrl(baseUrl, uri);
+                    if (abs.indexOf('MAGIC_PROXY') === 0) return _;
+                    return 'URI="MAGIC_PROXY_v1' + btoa(abs) + '"';
+                });
+                out.push(line);
+                continue;
+            }
+
+            // Preserve #EXT-X-STREAM-INF and tag lines as-is
+            if (line.indexOf('#EXT-X-STREAM-INF') === 0) { pendingInf = line; out.push(line); continue; }
+            if (line.indexOf('#EXT') === 0 || line.indexOf('#') === 0) { out.push(line); continue; }
+
+            // Blank line
+            if (!line.trim()) { out.push(line); continue; }
+
+            // URL line (after an inf or segment tag) — wrap with MAGIC_PROXY
+            var abs = resolveUrl(baseUrl, line);
+            if (abs.indexOf('MAGIC_PROXY') !== 0) abs = 'MAGIC_PROXY_v1' + btoa(abs);
+            out.push(abs);
+            pendingInf = null;
+        }
+
+        return out.join('\n');
+    }
+
     // ─── Crypto (via __crypto__) ────────────────────────────────────────────
     var nodeCrypto;
     try { nodeCrypto = __crypto__; } catch (_) { nodeCrypto = null; }
@@ -844,17 +950,62 @@
                     // 8. AES-CBC decrypt → m3u8 URL
                     var decryptedUrl = await aesCbcDecrypt(ciphertext, aesKey, iv);
 
-                    // 9. Proxy via Magic Proxy — the backend sends Referer/Origin
-                    //    headers that Cloudflare/flixcloud.cc requires.
-                    var magicUrl = 'MAGIC_PROXY_v1' + btoa(decryptedUrl);
+                    // 9. Fetch m3u8 ourselves, parse, reconstruct with MAGIC_PROXY URLs
+                    //    so the player gets absolute proxied URLs for every sub-request.
+                    var flixOrigin = (function () {
+                        try { var u = new URL(decryptedUrl); return u.protocol + '//' + u.host; } catch (_) { return ''; }
+                    })();
+                    var playHeaders = {
+                        'User-Agent': UA,
+                        'Accept':     '*/*',
+                        'Referer':    server.dataLink,
+                        'Origin':     flixOrigin
+                    };
+
+                    var masterRes = await http_get(decryptedUrl, playHeaders);
+                    var masterBody = getBody(masterRes);
+                    var master = masterBody ? parseHlsMaster(masterBody, decryptedUrl) : null;
                     var resLabel = server.serverName + ' (' + server.dataType + ')';
 
-                    var streams = [new StreamResult({
-                        url:    magicUrl,
-                        source: resLabel
-                    })];
+                    if (master && master.variants.length > 0) {
+                        var streams = [];
+                        for (var vi = 0; vi < master.variants.length; vi++) {
+                            var v = master.variants[vi];
+                            try {
+                                var varRes = await http_get(v.url, playHeaders);
+                                var varBody = getBody(varRes);
+                                if (!varBody || varBody.indexOf('#EXTM3U') === -1) continue;
 
-                    return streams;
+                                // Proxy every URL inside this variant playlist
+                                var proxiedVar = proxyM3u8Content(varBody.split('\n'), v.url);
+
+                                // Proxy media track URIs in the master
+                                var mediaLines = master.mediaLines.map(function (ml) {
+                                    return ml.replace(/URI="([^"]+)"/, function (_, uri) {
+                                        if (uri.indexOf('MAGIC_PROXY') === 0) return _;
+                                        var abs = resolveUrl(decryptedUrl, uri);
+                                        return 'URI="MAGIC_PROXY_v1' + btoa(abs) + '"';
+                                    });
+                                });
+
+                                var miniMaster = buildMiniMaster(
+                                    { url: 'magic_m3u8:' + btoa(proxiedVar), infLine: v.infLine },
+                                    mediaLines
+                                );
+
+                                streams.push(new StreamResult({
+                                    url:     miniMaster,
+                                    source:  resLabel
+                                }));
+                            } catch (_) {}
+                        }
+
+                        if (streams.length) return streams;
+                    }
+
+                    // Fallback: single MAGIC_PROXY URL
+                    var magicUrl = 'MAGIC_PROXY_v1' + btoa(decryptedUrl);
+                    return [new StreamResult({ url: magicUrl, source: resLabel })];
                 } catch (_) {
                     return [];
                 }
