@@ -53,7 +53,6 @@ https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json
 | **Idlix** | ID | Movies & Series |
 | **LayarKaca** | ID | Movies & Series |
 | **OtakuDesu** | ID | Anime |
-| **ReAnime** | EN | Anime |
 | **Samehadaku** | ID | Anime |
 | **Torrentio** | Global | Torrents |
 </details>
