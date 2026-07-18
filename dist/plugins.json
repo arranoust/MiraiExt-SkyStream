@@ -147,7 +147,7 @@
   {
     "packageName": "com.arranoust.torrentio",
     "name": "Torrentio",
-    "version": 3,
+    "version": 4,
     "baseUrl": "https://torrentio.strem.fun",
     "description": "Torrentio - Movies, Series & Anime via Torrent",
     "authors": [
@@ -165,7 +165,7 @@
       {
         "id": "Torrentio",
         "name": "Torrentio",
-        "baseUrl": "https://torrentio.strem.fun"
+        "baseUrl": "https://torrentio.strem.fun/sort=seeders"
       },
       {
         "id": "TorrentioAnime",
