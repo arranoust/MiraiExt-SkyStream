@@ -844,54 +844,15 @@
                     // 8. AES-CBC decrypt → m3u8 URL
                     var decryptedUrl = await aesCbcDecrypt(ciphertext, aesKey, iv);
 
-                    // 9. Parse m3u8 master playlist
-                    var playHeaders = {
-                        'Accept': '*/*',
-                        'Origin': (function () {
-                            try { var u = new URL(decryptedUrl); return u.protocol + '//' + u.host; } catch (_) { return 'https://fetch.flixcloud.cc'; }
-                        })(),
-                        'Referer': server.dataLink
-                    };
+                    // 9. Proxy via Magic Proxy — the backend sends Referer/Origin
+                    //    headers that Cloudflare/flixcloud.cc requires.
+                    var magicUrl = 'MAGIC_PROXY_v1' + btoa(decryptedUrl);
+                    var resLabel = server.serverName + ' (' + server.dataType + ')';
 
-                    var m3u8Res = await http_get(decryptedUrl, playHeaders);
-                    var m3u8Body = getBody(m3u8Res);
-
-                    var streams = [];
-                    var lines = m3u8Body.split('\n');
-                    var baseM3u8 = decryptedUrl.substring(0, decryptedUrl.lastIndexOf('/') + 1);
-                    for (var li = 0; li < lines.length; li++) {
-                        var line = lines[li].trim();
-                        if (line.indexOf('#EXT-X-STREAM-INF:') === 0) {
-                            var nextLine = (li + 1 < lines.length) ? lines[li + 1].trim() : '';
-                            if (!nextLine || nextLine.charAt(0) === '#') continue;
-
-                            var resMatch = line.match(/RESOLUTION=(\d+x\d+)/);
-                            var nameMatch = line.match(/NAME="([^"]*)"/);
-
-                            var quality = (nameMatch && nameMatch[1]) || (resMatch && resMatch[1]) || 'Default';
-                            var variantUrl = nextLine;
-                            if (!variantUrl.match(/^https?:\/\//i)) {
-                                variantUrl = baseM3u8 + variantUrl;
-                            }
-                            streams.push(new StreamResult({
-                                url:       variantUrl,
-                                quality:   quality,
-                                source:    server.serverName + ' (' + server.dataType + ')',
-                                headers:   playHeaders,
-                                videoOnly: true
-                            }));
-                        }
-                    }
-
-                    if (streams.length === 0) {
-                        streams.push(new StreamResult({
-                            url:       decryptedUrl,
-                            quality:   'Default',
-                            source:    server.serverName + ' (' + server.dataType + ')',
-                            headers:   playHeaders,
-                            videoOnly: true
-                        }));
-                    }
+                    var streams = [new StreamResult({
+                        url:    magicUrl,
+                        source: resLabel
+                    })];
 
                     return streams;
                 } catch (_) {
