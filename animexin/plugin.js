@@ -62,11 +62,6 @@
         return m2 ? m2[1] : null;
     }
 
-    function fixProtocol(url) {
-        if (!url) return '';
-        return url.startsWith('//') ? 'https:' + url : url;
-    }
-
     // ─── Resolvers ────────────────────────────────────────────────────────────
 
     // Dailymotion: geo.dailymotion.com/video/{id}.json → qualities.auto[0].url
@@ -194,17 +189,20 @@
 
     async function getHome(cb) {
         try {
-            var result = {};
-            for (var i = 0; i < HOME_CATEGORIES.length; i++) {
-                var cat = HOME_CATEGORIES[i];
+            var results = await Promise.all(HOME_CATEGORIES.map(async function (cat) {
                 try {
                     var html  = getBody(await http_get(BASE + cat.path + '&page=1', HEADERS));
                     var items = await parseArticles(html);
-                    if (items.length) result[cat.name] = items;
-                } catch (_) {}
-            }
+                    return { name: cat.name, items: items };
+                } catch (e) {
+                    console.error('AnimeXin: gagal memuat kategori ' + cat.name + ':', e);
+                    return { name: cat.name, items: [] };
+                }
+            }));
+            var result = {};
+            results.forEach(function (r) { if (r.items.length) result[r.name] = r.items; });
             if (!Object.keys(result).length)
-                return cb({ success: false, error: 'Failed to load homepage.' });
+                return cb({ success: false, error: 'Gagal memuat homepage.' });
             cb({ success: true, data: result });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -292,7 +290,7 @@
                 try {
                     var decoded  = safeAtob(opt.b64);
                     if (!decoded) return;
-                    var embedUrl = fixProtocol(extractIframeSrc(decoded));
+                    var embedUrl = fixUrl(extractIframeSrc(decoded));
                     if (!embedUrl || !embedUrl.startsWith('http')) return;
                     var result = await resolveEmbed(embedUrl, opt.label);
                     if (result) streams.push(result);

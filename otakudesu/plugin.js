@@ -12,6 +12,9 @@
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
     };
 
+    var AJAX_ACTION_NONCE = 'aa1208d27f29ca340c92c66d1926f13f';
+    var AJAX_ACTION_FETCH = '2a3505c93b0035d3f455df82bf976b84';
+
     // ─── Helpers ──────────────────────────────────────────────────────────────
     function forceString(val) {
         if (val == null)             return '';
@@ -466,10 +469,12 @@
 
             var nonce = '';
             try {
-                var nonceRes  = await http_post(ajaxUrl, ajaxHeaders, 'action=aa1208d27f29ca340c92c66d1926f13f');
+                var nonceRes  = await http_post(ajaxUrl, ajaxHeaders, 'action=' + AJAX_ACTION_NONCE);
                 var nonceJson = JSON.parse(getBody(nonceRes));
                 nonce = forceString(nonceJson.data || '');
-            } catch (_) {}
+            } catch (e) {
+                console.error('OtakuDesu: gagal mengambil nonce:', e);
+            }
 
             if (!nonce) return cb({ success: false, error: 'Gagal mengambil nonce.' });
 
@@ -491,7 +496,7 @@
                                         + '&i='     + encodeURIComponent(tokenObj.i)
                                         + '&q='     + encodeURIComponent(tokenObj.q)
                                         + '&nonce=' + encodeURIComponent(nonce)
-                                        + '&action=2a3505c93b0035d3f455df82bf976b84';
+                                        + '&action=' + AJAX_ACTION_FETCH;
 
                             var embedRes  = await http_post(ajaxUrl, ajaxHeaders, postBody);
                             var embedJson = JSON.parse(getBody(embedRes));

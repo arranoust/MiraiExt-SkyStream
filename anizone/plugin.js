@@ -7,6 +7,9 @@
         'Accept-Language': 'en-US,en;q=0.5'
     };
 
+    var HOSTNAME = (function () { try { return new URL(manifest.baseUrl).hostname; } catch (_) { return 'anizone.to'; } })();
+    var DOMAIN_REGEX = HOSTNAME.replace(/\./g, '\\.');
+
     var HOME_CATEGORIES = [
         { name: 'TV Series', type: '2' },
         { name: 'Movies',    type: '4' },
@@ -184,7 +187,11 @@
         if (wire.cookie) headers['Cookie'] = wire.cookie;
 
         var res  = getBody(await http_post(manifest.baseUrl + '/livewire/update', headers, payload));
-        var json = JSON.parse(res);
+        var json;
+        try { json = JSON.parse(res); } catch (e) {
+            console.error('AniZone: Livewire response malformed:', e);
+            return '';
+        }
         var comp = json.components[0];
         wire.snapshot = comp.snapshot;
         var newCookie = json.components[0]?.effects?.xdata?.cookie;
@@ -200,9 +207,9 @@
             var block = parts[i];
             var title = extractTitle('anmTitles:' + block);
             if (!title) continue;
-            var hrefM = block.match(/href="(https?:\/\/anizone\.to\/anime\/[a-z0-9]+)"/i);
+            var hrefM = block.match(new RegExp('href="(https?://' + DOMAIN_REGEX + '/anime/[a-z0-9]+)"', 'i'));
             if (!hrefM || /\/anime\/[a-z0-9]+\/\d+/i.test(hrefM[1])) continue;
-            var imgM = block.match(/src="(https?:\/\/anizone\.to\/images\/anime\/[^"]+)"/i);
+            var imgM = block.match(new RegExp('src="(https?://' + DOMAIN_REGEX + '/images/anime/[^"]+)"', 'i'));
             items.push(new MultimediaItem({
                 title:     title,
                 url:       hrefM[1],
@@ -218,7 +225,7 @@
         var parts = html.split(/<li\s+x-data="/i).slice(1);
         for (var i = 0; i < parts.length; i++) {
             var block = parts[i];
-            var epM   = block.match(/href="(https?:\/\/anizone\.to\/anime\/[a-z0-9]+\/(\d+))"/i);
+            var epM   = block.match(new RegExp('href="(https?://' + DOMAIN_REGEX + '/anime/[a-z0-9]+/(\\d+))"', 'i'));
             if (!epM) continue;
             var epNum  = parseInt(epM[2], 10);
             var thumbM = block.match(/\bsrc="(https?:\/\/[^"]+\/snapshot\.webp)"/i) || block.match(/\bsrc="(https?:\/\/[^"]+\.webp)"/i);
