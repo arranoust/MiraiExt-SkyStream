@@ -6,6 +6,7 @@
     var ANILIST_API = 'https://graphql.anilist.co';
     var ANI_ZIP     = 'https://api.ani.zip/mappings';
     var MEDIA_LIMIT = 20;
+    var MIN_SEEDERS = 5;
 
     var TRACKERS = [
         'udp://tracker.opentrackr.org:1337/announce',
@@ -106,6 +107,7 @@
             var seeders  = extractSeeders(s.title || '');
             var streamUrl;
             if (s.infoHash) {
+                if (seeders < MIN_SEEDERS) return;
                 streamUrl = buildMagnet(s.infoHash, s.name);
             } else if (s.url) {
                 streamUrl = s.url;
