@@ -1,14 +1,17 @@
 (function () {
 
     // ─── Config ──────────────────────────────────────────────────────────────
-    var BASE_URL = 'https://reanime.to';
     var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
 
-    var HEADERS = {
-        'User-Agent': UA,
-        'Accept': 'application/json, text/plain, */*',
-        'Referer': BASE_URL + '/'
-    };
+    function headers(extra) {
+        var h = {
+            'User-Agent': UA,
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': manifest.baseUrl + '/'
+        };
+        if (extra) { for (var k in extra) h[k] = extra[k]; }
+        return h;
+    }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
     function getBody(res) {
@@ -53,11 +56,34 @@
         return new TextEncoder().encode(str);
     }
 
-    // ─── Node.js crypto module ──────────────────────────────────────────────
+    function regexFind1(html, pattern) {
+        var m = html.match(pattern);
+        return m ? m[1] : null;
+    }
+
+    function titleFromObj(t) {
+        if (!t) return 'Unknown';
+        if (typeof t === 'string') return t;
+        return t.english || t.user_preferred || t.romaji || 'Unknown';
+    }
+
+    function scoreToDecimal(s) {
+        return (typeof s === 'number' && s > 0) ? Math.round(s) / 10 : undefined;
+    }
+
+    function formatDate(d) {
+        if (!d) return undefined;
+        var dt = new Date(d);
+        if (isNaN(dt.getTime())) return undefined;
+        return dt.getFullYear() + '-' +
+            String(dt.getMonth() + 1).padStart(2, '0') + '-' +
+            String(dt.getDate()).padStart(2, '0');
+    }
+
+    // ─── Crypto (via __crypto__) ────────────────────────────────────────────
     var nodeCrypto;
     try { nodeCrypto = __crypto__; } catch (_) { nodeCrypto = null; }
 
-    // ─── SHA-256 ────────────────────────────────────────────────────────────
     function sha256String(text) {
         if (nodeCrypto && nodeCrypto.createHash) {
             return nodeCrypto.createHash('sha256').update(text, 'utf-8').digest('hex');
@@ -72,7 +98,6 @@
         return new Uint8Array(crypto.subtle.digest('SHA-256', data));
     }
 
-    // ─── PBKDF2 (HMAC-SHA256, custom XOR chain matching Kotlin) ─────────────
     function pbkdf2Hmac(keyBytes, salt, iterations) {
         if (nodeCrypto && nodeCrypto.createHmac) {
             var input = Buffer.alloc(salt.length + 4);
@@ -113,7 +138,6 @@
         })();
     }
 
-    // ─── AES-CBC Decrypt ───────────────────────────────────────────────────
     function aesCbcDecrypt(ciphertext, key, iv) {
         if (nodeCrypto && nodeCrypto.createDecipheriv) {
             var decipher = nodeCrypto.createDecipheriv('aes-256-cbc', Buffer.from(key), Buffer.from(iv));
@@ -128,7 +152,7 @@
         );
     }
 
-    // ─── resolveMappings (same as Kotlin) ───────────────────────────────────
+    // ─── WASM field mappings (from obfuscation_seed) ────────────────────────
     async function resolveMappings(seed) {
         var e = seed;
         for (var o = 0; o < 3; o++) e = await sha256String(e + o.toString());
@@ -147,7 +171,7 @@
         };
     }
 
-    // ─── MiniWasmInterpreter (ported from Kotlin) ──────────────────────────
+    // ─── MiniWasmInterpreter ────────────────────────────────────────────────
     function MiniWasmInterpreter(wasmBytes) {
         this.memory = new Uint8Array(65536);
         this.globals = new Int32Array(16);
@@ -192,7 +216,7 @@
             offset = offsetRef[0];
             var end = offset + size;
 
-            if (type === 10) { // Code section
+            if (type === 10) {
                 var funcCount = this.readVarUint(offsetRef);
                 offset = offsetRef[0];
                 for (var f = 0; f < funcCount; f++) {
@@ -202,15 +226,15 @@
                     funcs.push(body);
                     offsetRef[0] = bodyStart + bodySize;
                 }
-            } else if (type === 11) { // Data section
+            } else if (type === 11) {
                 var segCount = this.readVarUint(offsetRef);
                 offset = offsetRef[0];
                 for (var s = 0; s < segCount; s++) {
                     var flags = this.readVarUint(offsetRef);
-                    if (flags === 0) { // Active segment
-                        offsetRef[0]++; // skip i32.const opcode (0x41)
+                    if (flags === 0) {
+                        offsetRef[0]++;
                         var memOffset = this.readVarSint(offsetRef);
-                        offsetRef[0]++; // skip end opcode (0x0b)
+                        offsetRef[0]++;
                         var dataLen = this.readVarUint(offsetRef);
                         for (var d = 0; d < dataLen; d++) {
                             this.memory[memOffset + d] = this.wasmBytes[offsetRef[0] + d];
@@ -238,7 +262,6 @@
         }
 
         this.globals[0] = seedInt;
-
         this.runFunc(funcs[0], [seedInt]);
         this.runFunc(funcs[1], [p, v, tOffset, i, k]);
 
@@ -252,7 +275,7 @@
         for (var a = 0; a < args.length; a++) locals.push(args[a]);
         for (var d = 0; d < localDeclCount; d++) {
             var count = this.readVarUintFromBuf(body, offsetRef);
-            offsetRef[0]++; // skip type byte (0x7f)
+            offsetRef[0]++;
             for (var c = 0; c < count; c++) locals.push(0);
         }
 
@@ -260,23 +283,22 @@
         var stack = [];
         var pc = 0;
 
-        // Build jump table
         var jumps = {};
         var blockStack = [];
         var tpc = 0;
         while (tpc < code.length) {
             var op = code[tpc] & 0xff;
-            if (op === 0x02 || op === 0x03) { // block or loop
+            if (op === 0x02 || op === 0x03) {
                 blockStack.push({ op: op, pc: tpc });
                 tpc += 2;
-            } else if (op === 0x0b) { // end
+            } else if (op === 0x0b) {
                 if (blockStack.length > 0) {
                     var entry = blockStack.pop();
                     jumps[entry.pc] = tpc;
                     jumps[tpc] = entry.pc;
                 }
                 tpc++;
-            } else if (op === 0x0c || op === 0x0d) { // br or br_if
+            } else if (op === 0x0c || op === 0x0d) {
                 tpc++;
                 var ref = [tpc];
                 this.readVarUintFromBuf(code, ref);
@@ -302,29 +324,29 @@
         while (pc < code.length) {
             var op = code[pc] & 0xff;
 
-            if (op === 0x02) { // block
+            if (op === 0x02) {
                 activeBlocks.push({ op: op, pc: pc, end: jumps[pc] || 0 });
                 pc += 2;
-            } else if (op === 0x03) { // loop
+            } else if (op === 0x03) {
                 activeBlocks.push({ op: op, pc: pc, end: jumps[pc] || 0 });
                 pc += 2;
-            } else if (op === 0x0b) { // end
+            } else if (op === 0x0b) {
                 if (activeBlocks.length > 0) activeBlocks.pop();
                 pc++;
-            } else if (op === 0x0c) { // br
+            } else if (op === 0x0c) {
                 pc++;
                 var ref = [pc];
                 var depth = this.readVarUintFromBuf(code, ref);
                 pc = ref[0];
                 var target = activeBlocks[activeBlocks.length - 1 - depth];
-                if (target.op === 0x02) { // block
+                if (target.op === 0x02) {
                     pc = target.end + 1;
                     for (var x = 0; x < depth + 1; x++) activeBlocks.pop();
-                } else { // loop
+                } else {
                     pc = target.pc + 2;
                     for (var x = 0; x < depth; x++) activeBlocks.pop();
                 }
-            } else if (op === 0x0d) { // br_if
+            } else if (op === 0x0d) {
                 pc++;
                 var ref = [pc];
                 var depth = this.readVarUintFromBuf(code, ref);
@@ -332,149 +354,149 @@
                 var cond = stack.pop();
                 if (cond !== 0) {
                     var target = activeBlocks[activeBlocks.length - 1 - depth];
-                    if (target.op === 0x02) { // block
+                    if (target.op === 0x02) {
                         pc = target.end + 1;
                         for (var x = 0; x < depth + 1; x++) activeBlocks.pop();
-                    } else { // loop
+                    } else {
                         pc = target.pc + 2;
                         for (var x = 0; x < depth; x++) activeBlocks.pop();
                     }
                 }
-            } else if (op === 0x20) { // local.get
+            } else if (op === 0x20) {
                 pc++;
                 var ref = [pc];
                 var idx = this.readVarUintFromBuf(code, ref);
                 pc = ref[0];
                 stack.push(locals[idx]);
-            } else if (op === 0x21) { // local.set
+            } else if (op === 0x21) {
                 pc++;
                 var ref = [pc];
                 var idx = this.readVarUintFromBuf(code, ref);
                 pc = ref[0];
                 locals[idx] = stack.pop();
-            } else if (op === 0x23) { // global.get
+            } else if (op === 0x23) {
                 pc++;
                 var ref = [pc];
                 var idx = this.readVarUintFromBuf(code, ref);
                 pc = ref[0];
                 stack.push(this.globals[idx]);
-            } else if (op === 0x24) { // global.set
+            } else if (op === 0x24) {
                 pc++;
                 var ref = [pc];
                 var idx = this.readVarUintFromBuf(code, ref);
                 pc = ref[0];
                 this.globals[idx] = stack.pop();
-            } else if (op === 0x41) { // i32.const
+            } else if (op === 0x41) {
                 pc++;
                 var ref = [pc];
                 var valConst = this.readVarSintFromBuf(code, ref);
                 pc = ref[0];
                 stack.push(valConst);
-            } else if (op === 0x2d) { // i32.load8_u
+            } else if (op === 0x2d) {
                 pc += 3;
                 var addr = stack.pop();
                 stack.push(this.memory[addr] & 0xff);
-            } else if (op === 0x3a) { // i32.store8
+            } else if (op === 0x3a) {
                 pc += 3;
                 var valStore = stack.pop();
                 var addr = stack.pop();
                 this.memory[addr] = valStore & 0xff;
-            } else if (op === 0x3b) { // i32.store16
+            } else if (op === 0x3b) {
                 pc += 3;
                 var valStore = stack.pop();
                 var addr = stack.pop();
                 this.memory[addr] = valStore & 0xff;
                 this.memory[addr + 1] = (valStore >>> 8) & 0xff;
-            } else if (op === 0x6a) { // i32.add
+            } else if (op === 0x6a) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(a + b);
-            } else if (op === 0x6b) { // i32.sub
+            } else if (op === 0x6b) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(a - b);
-            } else if (op === 0x6c) { // i32.mul
+            } else if (op === 0x6c) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(a * b);
-            } else if (op === 0x73) { // i32.xor
+            } else if (op === 0x73) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(a ^ b);
-            } else if (op === 0x74) { // i32.shl
+            } else if (op === 0x74) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(a << (b & 31));
-            } else if (op === 0x75) { // i32.shr_s
+            } else if (op === 0x75) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(a >> (b & 31));
-            } else if (op === 0x76) { // i32.shr_u
+            } else if (op === 0x76) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push((a >>> 0) >> (b & 31));
-            } else if (op === 0x72) { // i32.or
+            } else if (op === 0x72) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(a | b);
-            } else if (op === 0x71) { // i32.and
+            } else if (op === 0x71) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(a & b);
-            } else if (op === 0x6d) { // i32.div_u
+            } else if (op === 0x6d) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(((a >>> 0) / (b >>> 0)) | 0);
-            } else if (op === 0x70) { // i32.rem_u
+            } else if (op === 0x70) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(((a >>> 0) % (b >>> 0)) | 0);
-            } else if (op === 0x4f) { // i32.ge_u
+            } else if (op === 0x4f) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(((a >>> 0) >= (b >>> 0)) ? 1 : 0);
-            } else if (op === 0x45) { // i32.eqz
+            } else if (op === 0x45) {
                 pc++;
                 var a = stack.pop();
                 stack.push((a === 0) ? 1 : 0);
-            } else if (op === 0x46) { // i32.eq
+            } else if (op === 0x46) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push((a === b) ? 1 : 0);
-            } else if (op === 0x47) { // i32.ne
+            } else if (op === 0x47) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push((a !== b) ? 1 : 0);
-            } else if (op === 0x49) { // i32.lt_u
+            } else if (op === 0x49) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(((a >>> 0) < (b >>> 0)) ? 1 : 0);
-            } else if (op === 0x4b) { // i32.gt_u
+            } else if (op === 0x4b) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(((a >>> 0) > (b >>> 0)) ? 1 : 0);
-            } else if (op === 0x4d) { // i32.le_u
+            } else if (op === 0x4d) {
                 pc++;
                 var b = stack.pop();
                 var a = stack.pop();
                 stack.push(((a >>> 0) <= (b >>> 0)) ? 1 : 0);
-            } else if (op === 0x0f) { // return
+            } else if (op === 0x0f) {
                 pc++;
             } else {
                 throw new Error('Unsupported opcode: 0x' + op.toString(16));
@@ -511,46 +533,29 @@
         return result;
     };
 
-    // ─── buildPlaybackHeaders ───────────────────────────────────────────────
-    function buildPlaybackHeaders(videoUrl, embedUrl) {
-        var origin = 'https://fetch.flixcloud.cc';
-        try {
-            var u = new URL(videoUrl);
-            origin = u.protocol + '//' + u.host;
-        } catch (_) {}
-        return {
-            'Accept': '*/*',
-            'Origin': origin,
-            'Referer': embedUrl
-        };
-    }
-
-    // ─── Regex helper for embed HTML ───────────────────────────────────────
-    function regexFind1(html, pattern) {
-        var m = html.match(pattern);
-        return m ? m[1] : null;
-    }
-
     // ─── getHome ────────────────────────────────────────────────────────────
     async function getHome(cb) {
         try {
             var [topRes, latestRes] = await Promise.all([
-                http_get(BASE_URL + '/api/v1/top/anime?period=week&limit=20', HEADERS),
-                http_get(BASE_URL + '/api/v1/home/latest-aired?limit=20', HEADERS)
+                http_get(manifest.baseUrl + '/api/v1/top/anime?period=week&limit=20', headers()),
+                http_get(manifest.baseUrl + '/api/v1/home/latest-aired?limit=20', headers())
             ]);
 
             var topData = parseJson(topRes);
             var latestData = parseJson(latestRes);
-
             var result = {};
 
             if (topData && topData.data && topData.data.length) {
                 result['Trending'] = topData.data.map(function (item) {
                     return new MultimediaItem({
-                        title:     item.title && (item.title.english || item.title.user_preferred || item.title.romaji) || 'Unknown',
+                        title:     titleFromObj(item.title),
                         url:       String(item.anime_id),
                         posterUrl: item.cover_image && (item.cover_image.large || item.cover_image.medium) || '',
-                        type:      'anime'
+                        bannerUrl: item.banner_image || '',
+                        type:      'anime',
+                        score:     scoreToDecimal(item.average_score),
+                        year:      item.season_year || undefined,
+                        isAdult:   item.is_adult || false
                     });
                 });
             }
@@ -558,10 +563,14 @@
             if (latestData && latestData.data && latestData.data.length) {
                 result['Latest Aired'] = latestData.data.map(function (item) {
                     return new MultimediaItem({
-                        title:     item.title && (item.title.english || item.title.user_preferred || item.title.romaji) || 'Unknown',
+                        title:     titleFromObj(item.title),
                         url:       String(item.anime_id),
                         posterUrl: item.cover_image && (item.cover_image.large || item.cover_image.medium) || '',
-                        type:      'anime'
+                        bannerUrl: item.banner_image || '',
+                        type:      'anime',
+                        score:     scoreToDecimal(item.average_score),
+                        year:      item.season_year || undefined,
+                        isAdult:   item.is_adult || false
                     });
                 });
             }
@@ -575,23 +584,36 @@
     }
 
     // ─── search ─────────────────────────────────────────────────────────────
-    async function search(query, cb) {
+    async function search(query, pageOrCb, cb) {
+        var page, callback;
+        if (typeof pageOrCb === 'function') {
+            page = 1;
+            callback = pageOrCb;
+        } else {
+            page = pageOrCb || 1;
+            callback = cb;
+        }
         try {
+            var offset = (page - 1) * 20;
             var encoded = encodeURIComponent(query);
-            var res = await http_get(BASE_URL + '/api/v1/search?q=' + encoded + '&limit=20&offset=0', HEADERS);
+            var res = await http_get(manifest.baseUrl + '/api/v1/search?q=' + encoded + '&limit=20&offset=' + offset, headers());
             var data = parseJson(res);
 
             var items = (data && data.results || []).map(function (item) {
                 return new MultimediaItem({
-                    title:     item.title && (item.title.english || item.title.user_preferred || item.title.romaji) || 'Unknown',
+                    title:     titleFromObj(item.title),
                     url:       String(item.anime_id),
                     posterUrl: item.cover_image && (item.cover_image.large || item.cover_image.medium) || '',
-                    type:      'anime'
+                    bannerUrl: item.banner_image || '',
+                    type:      'anime',
+                    score:     scoreToDecimal(item.average_score),
+                    year:      item.season_year || undefined,
+                    isAdult:   item.is_adult || false
                 });
             });
 
-            cb({ success: true, data: items });
-        } catch (e) { cb({ success: false, error: String(e) }); }
+            callback({ success: true, data: items });
+        } catch (e) { callback({ success: false, error: String(e) }); }
     }
 
     // ─── load ───────────────────────────────────────────────────────────────
@@ -599,8 +621,8 @@
         try {
             var animeId = url;
             var [detailRes, episodesRes] = await Promise.all([
-                http_get(BASE_URL + '/api/v1/anime/' + animeId, HEADERS),
-                http_get(BASE_URL + '/api/v1/anime/' + animeId + '/episodes?limit=2000', HEADERS)
+                http_get(manifest.baseUrl + '/api/v1/anime/' + animeId, headers()),
+                http_get(manifest.baseUrl + '/api/v1/anime/' + animeId + '/episodes?limit=2000', headers())
             ]);
 
             var detail = parseJson(detailRes);
@@ -620,8 +642,6 @@
                 else if (s === 'releasing') status = 'ongoing';
             }
 
-            var genres = detail.genres || [];
-
             // Parse episodes
             var epList = [];
             if (Array.isArray(epsRaw)) {
@@ -640,38 +660,63 @@
                     url:       animeId + '?ep=' + ep.episode_number,
                     season:    1,
                     episode:   ep.episode_number,
+                    airDate:   formatDate(ep.aired),
+                    runtime:   ep.duration || undefined,
                     dubStatus: 'subbed'
                 });
-            }).reverse(); // Ascending order
+            }).reverse();
 
-            // Build syncData with anilist_id if available
+            // syncData for anilist progress tracking
             var syncData = undefined;
             if (detail.anilist_id) {
                 syncData = { anilist: String(detail.anilist_id) };
             }
 
-            // Title may be an object { english, romaji, user_preferred } or a string
-            var animeTitle = 'Unknown';
-            if (detail.title) {
-                if (typeof detail.title === 'string') {
-                    animeTitle = detail.title;
-                } else if (typeof detail.title === 'object') {
-                    animeTitle = detail.title.english || detail.title.user_preferred || detail.title.romaji || 'Unknown';
-                }
+            // nextAiring
+            var nextAiring = undefined;
+            if (detail.next_airing_episode && detail.next_airing_episode.airing_at) {
+                nextAiring = new NextAiring({
+                    episode:  detail.next_airing_episode.episode,
+                    season:   1,
+                    unixTime: Math.floor(new Date(detail.next_airing_episode.airing_at).getTime() / 1000)
+                });
+            }
+
+            // cast from characters
+            var cast = undefined;
+            if (detail.characters && detail.characters.length) {
+                cast = detail.characters.slice(0, 20).map(function (c) {
+                    return new Actor({ name: c.name, role: c.role || '' });
+                });
+            }
+
+            // trailer
+            var trailers = undefined;
+            if (detail.trailer && detail.trailer.id) {
+                trailers = [new Trailer({ url: 'https://www.youtube.com/watch?v=' + detail.trailer.id })];
             }
 
             cb({
                 success: true,
                 data: new MultimediaItem({
-                    title:       animeTitle,
-                    url:         animeId,
-                    posterUrl:   detail.cover_image && (detail.cover_image.large || detail.cover_image.medium) || '',
-                    type:        'anime',
-                    status:      status,
-                    description: description,
-                    tags:        genres,
-                    episodes:    episodes,
-                    syncData:    syncData
+                    title:         titleFromObj(detail.title),
+                    url:           animeId,
+                    posterUrl:     detail.cover_image && (detail.cover_image.large || detail.cover_image.medium) || '',
+                    bannerUrl:     detail.banner_image || '',
+                    type:          'anime',
+                    status:        status,
+                    description:   description,
+                    tags:          detail.genres || [],
+                    episodes:      episodes,
+                    syncData:      syncData,
+                    score:         scoreToDecimal(detail.average_score),
+                    year:          detail.season_year || undefined,
+                    duration:      detail.duration || undefined,
+                    contentRating: detail.rating || undefined,
+                    isAdult:       detail.is_adult || false,
+                    nextAiring:    nextAiring,
+                    cast:          cast,
+                    trailers:      trailers
                 })
             });
         } catch (e) { cb({ success: false, error: String(e) }); }
@@ -687,13 +732,13 @@
                 : requestUrl.split('/').pop();
 
             // 1. Fetch anime details to get anilist_id
-            var watchRes = await http_get(BASE_URL + '/api/v1/anime/' + slug, HEADERS);
+            var watchRes = await http_get(manifest.baseUrl + '/api/v1/anime/' + slug, headers());
             var watchData = parseJson(watchRes);
             if (!watchData) return cb({ success: false, error: 'Failed to fetch anime details.' });
 
             var anilistId = watchData.anilist_id || 0;
 
-            // Try extracting from cover image URL if not in response
+            // Fallback: extract from cover image URL
             if (!anilistId) {
                 var coverUrls = [
                     watchData.cover_image && watchData.cover_image.extra_large,
@@ -701,28 +746,25 @@
                     watchData.cover_image && watchData.cover_image.medium
                 ];
                 for (var ci = 0; ci < coverUrls.length; ci++) {
-                    var coverUrl = coverUrls[ci];
-                    if (coverUrl) {
-                        var m = coverUrl.match(/\/bx(\d+)-/);
-                        if (m) { anilistId = parseInt(m[1], 10); break; }
-                    }
+                    var m = (coverUrls[ci] || '').match(/\/bx(\d+)-/);
+                    if (m) { anilistId = parseInt(m[1], 10); break; }
                 }
             }
 
             if (!anilistId) return cb({ success: false, error: 'Could not find anilist_id.' });
 
             // 2. Fetch Flix API for servers
-            var flixHeaders = Object.assign({}, HEADERS, {
-                'Referer': BASE_URL + '/watch/' + slug + '?ep=' + epNumStr
+            var flixHeaders = headers({
+                'Referer': manifest.baseUrl + '/watch/' + slug + '?ep=' + epNumStr
             });
-            var flixRes = await http_get(BASE_URL + '/api/flix/' + anilistId + '/' + epNumStr, flixHeaders);
+            var flixRes = await http_get(manifest.baseUrl + '/api/flix/' + anilistId + '/' + epNumStr, flixHeaders);
             var flixData = parseJson(flixRes);
 
             if (!flixData || !flixData.servers || !flixData.servers.length) {
                 return cb({ success: false, error: 'No servers found.' });
             }
 
-            // Deduplicate servers by dataLink
+            // Deduplicate by dataLink
             var servers = [];
             flixData.servers.forEach(function (server) {
                 var exists = servers.some(function (s) { return s.dataLink === server.dataLink; });
@@ -734,33 +776,30 @@
 
             var tasks = servers.map(async function (server) {
                 try {
-                    var embedReferer = BASE_URL + '/watch/' + slug + '?ep=' + epNumStr;
-                    var embedRes = await http_get(server.dataLink, Object.assign({}, HEADERS, { 'Referer': embedReferer }));
+                    var embedReferer = manifest.baseUrl + '/watch/' + slug + '?ep=' + epNumStr;
+                    var embedRes = await http_get(server.dataLink, headers({ 'Referer': embedReferer }));
                     var embedHtml = getBody(embedRes);
 
                     var seed = regexFind1(embedHtml, /obfuscation_seed\s*:\s*"([^"]+)"/);
-                    if (!seed) throw new Error('obfuscation_seed not found in embed (' + server.serverName + ')');
+                    if (!seed) throw new Error('obfuscation_seed not found (' + server.serverName + ')');
 
                     var wPayload = regexFind1(embedHtml, /w_payload\s*:\s*"([^"]+)"/);
-                    if (!wPayload) throw new Error('w_payload not found in embed (' + server.serverName + ')');
+                    if (!wPayload) throw new Error('w_payload not found (' + server.serverName + ')');
 
                     var mappings = await resolveMappings(seed);
 
                     var w = regexFind1(embedHtml, new RegExp('"?' + mappings.tokenField + '"?\\s*:\\s*"([^"]+)"'));
-                    if (!w) throw new Error('tokenField not found — seed=' + seed);
+                    if (!w) throw new Error('tokenField not found');
 
                     var frag2B64 = regexFind1(embedHtml, new RegExp('"?' + mappings.keyFrag2Field + '"?\\s*:\\s*"([^"]+)"'));
                     if (!frag2B64) throw new Error('keyFrag2Field not found');
 
                     // 4. Fetch session token from flixcloud.cc
-                    var m3u8ApiUrl = 'https://flixcloud.cc/api/m3u8/' + w;
-                    var tokenHeaders = {
+                    var tokenRes = await http_get('https://flixcloud.cc/api/m3u8/' + w, {
                         'Referer': server.dataLink,
                         'Origin': 'https://flixcloud.cc'
-                    };
-                    var tokenRes = await http_get(m3u8ApiUrl, tokenHeaders);
-                    var tokenBody = getBody(tokenRes);
-                    var tokenJson = parseJson(tokenBody);
+                    });
+                    var tokenJson = parseJson(tokenRes);
                     if (!tokenJson) throw new Error('Failed to parse m3u8 token response');
 
                     var kField = (await sha256String(w + 'vid')).substring(0, 10);
@@ -768,17 +807,17 @@
 
                     var v = tokenJson[kField];
                     var t = tokenJson[pField];
-                    if (!v) throw new Error('kField (' + kField + ') not in m3u8 response');
-                    if (!t) throw new Error('pField (' + pField + ') not in m3u8 response');
+                    if (!v) throw new Error('kField not in m3u8 response');
+                    if (!t) throw new Error('pField not in m3u8 response');
 
-                    // 5. Get remaining crypto fragments from embed
+                    // 5. Get remaining crypto fragments
                     var frag1B64 = regexFind1(embedHtml, new RegExp('"?' + mappings.keyField + '"?\\s*:\\s*"([^"]+)"'));
                     if (!frag1B64) throw new Error('keyField not found');
 
                     var ivB64 = regexFind1(embedHtml, new RegExp('"?' + mappings.ivField + '"?\\s*:\\s*"([^"]+)"'));
                     if (!ivB64) throw new Error('ivField not found');
 
-                    // 6. WASM interpretation
+                    // 6. WASM key derivation
                     var frag1Bytes = base64ToBytes(frag1B64);
                     var frag2Bytes = base64ToBytes(frag2B64);
                     var keyPartBytes = base64ToBytes(t);
@@ -805,13 +844,19 @@
                     // 8. AES-CBC decrypt → m3u8 URL
                     var decryptedUrl = await aesCbcDecrypt(ciphertext, aesKey, iv);
 
-                    // 9. Parse m3u8 master playlist for quality variants
-                    var playHeaders = buildPlaybackHeaders(decryptedUrl, server.dataLink);
+                    // 9. Parse m3u8 master playlist
+                    var playHeaders = {
+                        'Accept': '*/*',
+                        'Origin': (function () {
+                            try { var u = new URL(decryptedUrl); return u.protocol + '//' + u.host; } catch (_) { return 'https://fetch.flixcloud.cc'; }
+                        })(),
+                        'Referer': server.dataLink
+                    };
+
                     var m3u8Res = await http_get(decryptedUrl, playHeaders);
                     var m3u8Body = getBody(m3u8Res);
 
                     var streams = [];
-                    // Try parsing m3u8 master playlist for variants
                     var lines = m3u8Body.split('\n');
                     var baseM3u8 = decryptedUrl.substring(0, decryptedUrl.lastIndexOf('/') + 1);
                     for (var li = 0; li < lines.length; li++) {
@@ -820,7 +865,6 @@
                             var nextLine = (li + 1 < lines.length) ? lines[li + 1].trim() : '';
                             if (!nextLine || nextLine.charAt(0) === '#') continue;
 
-                            var bwMatch = line.match(/BANDWIDTH=(\d+)/);
                             var resMatch = line.match(/RESOLUTION=(\d+x\d+)/);
                             var nameMatch = line.match(/NAME="([^"]*)"/);
 
@@ -830,21 +874,22 @@
                                 variantUrl = baseM3u8 + variantUrl;
                             }
                             streams.push(new StreamResult({
-                                url:     variantUrl,
-                                quality: quality,
-                                source:  server.serverName + ' (' + server.dataType + ')',
-                                headers: playHeaders
+                                url:       variantUrl,
+                                quality:   quality,
+                                source:    server.serverName + ' (' + server.dataType + ')',
+                                headers:   playHeaders,
+                                videoOnly: true
                             }));
                         }
                     }
 
-                    // If no variants found, return master URL directly
                     if (streams.length === 0) {
                         streams.push(new StreamResult({
-                            url:     decryptedUrl,
-                            quality: 'Default',
-                            source:  server.serverName + ' (' + server.dataType + ')',
-                            headers: playHeaders
+                            url:       decryptedUrl,
+                            quality:   'Default',
+                            source:    server.serverName + ' (' + server.dataType + ')',
+                            headers:   playHeaders,
+                            videoOnly: true
                         }));
                     }
 
