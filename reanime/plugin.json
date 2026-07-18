@@ -1,0 +1,16 @@
+{
+  "packageName": "com.arranoust.reanime",
+  "name": "ReAnime",
+  "version": 1,
+  "baseUrl": "https://reanime.to",
+  "description": "ReAnime - English anime streaming via AniList",
+  "authors": [
+    "arranoust"
+  ],
+  "languages": [
+    "en"
+  ],
+  "categories": [
+    "Anime"
+  ]
+}
