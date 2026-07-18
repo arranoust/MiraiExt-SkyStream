@@ -19,7 +19,7 @@
   {
     "packageName": "com.arranoust.animeonsen",
     "name": "AnimeOnsen",
-    "version": 1,
+    "version": 2,
     "baseUrl": "https://www.animeonsen.xyz",
     "description": "AnimeOnsen - Multi-language anime streaming with softsubs",
     "authors": [
@@ -89,7 +89,7 @@
   {
     "packageName": "com.arranoust.layarkaca",
     "name": "LayarKaca",
-    "version": 3,
+    "version": 4,
     "baseUrl": "https://lk21.de",
     "domains": [
       {
@@ -147,7 +147,7 @@
   {
     "packageName": "com.arranoust.torrentio",
     "name": "Torrentio",
-    "version": 2,
+    "version": 3,
     "baseUrl": "https://torrentio.strem.fun",
     "description": "Torrentio - Movies, Series & Anime via Torrent",
     "authors": [
