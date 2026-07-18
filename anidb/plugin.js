@@ -119,7 +119,9 @@
                     var item = res && res[i];
                     return { body: String((item && (item.body || item.text)) || ''), url: r.url };
                 });
-            } catch (_) {}
+            } catch (e) {
+                console.error('AniDB: http_parallel gagal, fallback ke Promise.all:', e);
+            }
         }
         return Promise.all(requests.map(function (r) {
             return http_get(r.url, r.headers || HTML_HDR)
@@ -181,7 +183,7 @@
         return null;
     }
 
-    function parseEpisodes(episodes, animeUrl, aniZip, dubStatus, typeParam) {
+    function parseEpisodes(episodes, animeUrl, aniZip, dubStatus, typeParam, animePoster) {
         if (!episodes || !episodes.length) return [];
 
         var suffix = typeParam ? '?type=' + typeParam : '';
@@ -195,9 +197,11 @@
             if (epMeta) {
                 var metaTitle = epMeta.title && (epMeta.title.en || epMeta.title['x-jat'] || epMeta.title.ja);
                 if (metaTitle) epName = metaTitle;
+            } else if (aniZip && aniZip.titles && aniZip.titles.en) {
+                epName = aniZip.titles.en + ' - Episode ' + num;
             }
 
-            var epPoster = (epMeta && epMeta.image) || '';
+            var epPoster = (epMeta && epMeta.image) || animePoster || '';
             var epDesc = (epMeta && epMeta.overview) || '';
             var epAir = (epMeta && (epMeta.airDateUtc || epMeta.airdate)) || '';
 
@@ -209,6 +213,7 @@
                 posterUrl:  epPoster,
                 description: epDesc,
                 airDate:    epAir ? epAir.substring(0, 10) : '',
+                runtime:    epMeta && epMeta.runtime ? Math.round(epMeta.runtime) : undefined,
                 dubStatus:  dubStatus || 'none',
                 headers:    HTML_HDR
             }));
@@ -296,7 +301,7 @@
 
             var epRes = parseJSON(await http_get(BASE + '/api/frontend/anime/' + siteId + '/episodes', API_HDR));
             var epList = (epRes && epRes.episodes) || [];
-            if (!epList.length) return cb({ success: false, error: 'No episodes found.' });
+            if (!epList.length) return cb({ success: false, error: 'Tidak ditemukan episode.' });
 
             var aniZip = null;
             try {
@@ -307,7 +312,9 @@
                     var zipRes = parseJSON(await http_get(zipUrl, { 'User-Agent': UA, Accept: 'application/json' }));
                     if (zipRes && zipRes.episodes) aniZip = zipRes;
                 }
-            } catch (_) {}
+            } catch (e) {
+                console.error('AniDB: gagal mengambil data ani.zip:', e);
+            }
 
             var firstEpId = epList[0] && epList[0].id;
             var hasSub = true, hasDub = false;
@@ -320,15 +327,17 @@
                     var langs = (langRes && langRes.languages) || [];
                     hasSub = !langs.length || langs.some(function (l) { return classifyLanguage(l) === 'sub'; });
                     hasDub = langs.some(function (l) { return classifyLanguage(l) === 'dub'; });
-                } catch (_) {}
+                } catch (e) {
+                    console.error('AniDB: gagal mendeteksi bahasa:', e);
+                }
             }
 
             var episodes = [];
             if (hasDub) {
-                episodes = episodes.concat(parseEpisodes(epList, url, aniZip, 'sub', 'sub'));
-                episodes = episodes.concat(parseEpisodes(epList, url, aniZip, 'dub', 'dub'));
+                episodes = episodes.concat(parseEpisodes(epList, url, aniZip, 'sub', 'sub', poster));
+                episodes = episodes.concat(parseEpisodes(epList, url, aniZip, 'dub', 'dub', poster));
             } else {
-                episodes = parseEpisodes(epList, url, aniZip, 'sub');
+                episodes = parseEpisodes(epList, url, aniZip, 'sub', null, poster);
             }
 
             cb({

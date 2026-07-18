@@ -36,16 +36,18 @@
     // ── Individual resolvers ──
 
     async function resolveFiledon(embedUrl) {
-        var slug = embedUrl.split('/embed/').pop().split(/[/?]/)[0];
-        if (!slug) return null;
-        var res = await http_get('https://filedon.co/embed/' + slug, {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Referer': manifest.baseUrl + '/'
-        });
-        var m = res.body.match(/id="app"\s+data-page="([^"]+)"/);
-        if (!m) return null;
-        var json = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
-        return json?.props?.url || json?.url || null;
+        try {
+            var slug = embedUrl.split('/embed/').pop().split(/[/?]/)[0];
+            if (!slug) return null;
+            var res = await http_get('https://filedon.co/embed/' + slug, {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                'Referer': manifest.baseUrl + '/'
+            });
+            var m = res.body.match(/id="app"\s+data-page="([^"]+)"/);
+            if (!m) return null;
+            var json = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+            return json?.props?.url || json?.url || null;
+        } catch (_) { return null; }
     }
 
     async function resolvePixelDrain(url) {
@@ -54,13 +56,13 @@
     }
 
     async function resolveWibufile(iframeUrl, label) {
-        var res = await http_get(iframeUrl, {
-            'Referer': manifest.baseUrl + '/',
-            'User-Agent': BASE_HEADERS['User-Agent']
-        });
-        var m = res.body.match(/sources:\s*(\[.*?\])/s);
-        if (!m) return null;
         try {
+            var res = await http_get(iframeUrl, {
+                'Referer': manifest.baseUrl + '/',
+                'User-Agent': BASE_HEADERS['User-Agent']
+            });
+            var m = res.body.match(/sources:\s*(\[.*?\])/s);
+            if (!m) return null;
             var sources = JSON.parse(m[1].replace(/\\\//g, '/'));
             return sources.map(function(s) {
                 return new StreamResult({
@@ -76,14 +78,16 @@
     // ── Embed player (online streaming) ──
 
     async function resolveStream(iframeUrl, label) {
-        if (iframeUrl.startsWith('/embed/')) iframeUrl = 'https://filedon.co' + iframeUrl;
-        if (iframeUrl.includes('filedon.co/embed/')) {
-            var url = await resolveFiledon(iframeUrl);
-            return url ? new StreamResult({ url, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://filedon.co/' } }) : null;
-        }
-        if (iframeUrl.includes('api.wibufile.com/embed/')) return resolveWibufile(iframeUrl, label);
-        if (iframeUrl.includes('wibufile.com')) return new StreamResult({ url: iframeUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: manifest.baseUrl + '/' } });
-        return null;
+        try {
+            if (iframeUrl.startsWith('/embed/')) iframeUrl = 'https://filedon.co' + iframeUrl;
+            if (iframeUrl.includes('filedon.co/embed/')) {
+                var url = await resolveFiledon(iframeUrl);
+                return url ? new StreamResult({ url, quality: fixQuality(label), source: label.trim(), headers: { Referer: 'https://filedon.co/' } }) : null;
+            }
+            if (iframeUrl.includes('api.wibufile.com/embed/')) return resolveWibufile(iframeUrl, label);
+            if (iframeUrl.includes('wibufile.com')) return new StreamResult({ url: iframeUrl, quality: fixQuality(label), source: label.trim(), headers: { Referer: manifest.baseUrl + '/' } });
+            return null;
+        } catch (_) { return null; }
     }
 
     async function resolveEmbedButtons(body) {
@@ -136,14 +140,18 @@
             if (!qMatch) continue;
             var q = qMatch[1].trim();
             for (var r of DL_RESOLVERS) {
-                var match = block.match(r.regex);
-                if (!match) continue;
-                var url = await r.resolve(match[1]);
-                if (url) streams.push(new StreamResult({
-                    url, quality: fixQuality(q),
-                    source: r.name + ' ' + fixQuality(q),
-                    headers: r.headers
-                }));
+                try {
+                    var match = block.match(r.regex);
+                    if (!match) continue;
+                    var url = await r.resolve(match[1]);
+                    if (url) streams.push(new StreamResult({
+                        url, quality: fixQuality(q),
+                        source: r.name + ' ' + fixQuality(q),
+                        headers: r.headers
+                    }));
+                } catch (e) {
+                    console.error('Samehadaku: DL resolver ' + r.name + ' failed:', e);
+                }
             }
         }
         return streams;
@@ -234,12 +242,15 @@
                     }
 
                     return { key: cat.key, list: items };
-                } catch (_) { return { key: cat.key, list: [] }; }
+                } catch (e) {
+                    console.error('Samehadaku: gagal memuat kategori ' + cat.key + ':', e);
+                    return { key: cat.key, list: [] };
+                }
             }));
 
             var data = {};
             results.forEach(function (r) { if (r.list.length) data[r.key] = r.list; });
-            if (!Object.keys(data).length) return cb({ success: false, error: 'No data scraped.' });
+            if (!Object.keys(data).length) return cb({ success: false, error: 'Gagal memuat homepage.' });
             cb({ success: true, data: data });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -386,25 +397,25 @@
             ]);
 
             var flat = [...(embedStreams || []), ...(dlStreams || [])];
-            const Q = ['2160p', '1080p', '720p', '480p', '360p'];
+            var Q = ['2160p', '1080p', '720p', '480p', '360p'];
 
-            flat.sort((a, b) => {
-                const parse = src => {
-                    const q = (src || '').match(/2160p|1080p|720p|480p|360p/i)?.[0] || '';
-                    const idx = Q.indexOf(q.toLowerCase());
+            flat.sort(function(a, b) {
+                var parse = function(src) {
+                    var q = (src || '').match(/2160p|1080p|720p|480p|360p/i)?.[0] || '';
+                    var idx = Q.indexOf(q.toLowerCase());
                     return {
                         server: (src || '').replace(q, '').trim().toLowerCase(),
                         qIndex: idx === -1 ? 99 : idx
                     };
                 };
 
-                const valA = parse(a.source);
-                const valB = parse(b.source);
+                var valA = parse(a.source);
+                var valB = parse(b.source);
 
                 return valA.server.localeCompare(valB.server) || (valA.qIndex - valB.qIndex);
             });
 
-            if (!flat.length) return cb({ success: false, error: 'No playable streams found.' });
+            if (!flat.length) return cb({ success: false, error: 'Tidak ditemukan stream yang bisa diputar.' });
             cb({ success: true, data: flat });
         } catch (e) { cb({ success: false, error: String(e) }); }
     }
@@ -414,4 +425,4 @@
     globalThis.load       = load;
     globalThis.loadStreams = loadStreams;
 
-}());
+})();
