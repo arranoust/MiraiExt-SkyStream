@@ -128,6 +128,23 @@
     "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.otakudesu.sky"
   },
   {
+    "packageName": "com.arranoust.reanime",
+    "name": "ReAnime",
+    "version": 1,
+    "baseUrl": "https://reanime.to",
+    "description": "ReAnime - Watch free anime online in HD. Stream the latest seasonal hits, classic series, and everything in between — with no ads, no clutter, just anime.",
+    "authors": [
+      "arranoust"
+    ],
+    "languages": [
+      "en"
+    ],
+    "categories": [
+      "Anime"
+    ],
+    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.reanime.sky"
+  },
+  {
     "packageName": "com.arranoust.samehadaku",
     "name": "Samehadaku",
     "version": 10,
