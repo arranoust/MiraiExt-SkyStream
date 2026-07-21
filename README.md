@@ -9,7 +9,7 @@
 
 **📌 Community**
 
-[![Telegram Group](https://img.shields.io/badge/Telegram-Group-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/arransdiscussion)
+[![Telegram Group](https://img.shields.io/badge/Telegram-Group-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/arranschannel)
 
 <br>
 
