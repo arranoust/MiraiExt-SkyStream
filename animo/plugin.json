@@ -1,0 +1,16 @@
+{
+  "packageName": "com.arranoust.animo",
+  "name": "Animo",
+  "version": 2,
+  "baseUrl": "https://4animo.xyz",
+  "description": "Animo - Watch High Quality Anime Online",
+  "authors": [
+    "arranoust"
+  ],
+  "languages": [
+    "en"
+  ],
+  "categories": [
+    "Anime"
+  ]
+}
