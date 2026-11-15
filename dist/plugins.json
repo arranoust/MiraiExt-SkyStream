@@ -14,7 +14,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.anidb.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.anidb.sky"
   },
   {
     "packageName": "com.arranoust.animeonsen",
@@ -31,7 +31,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.animeonsen.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.animeonsen.sky"
   },
   {
     "packageName": "com.arranoust.animexin",
@@ -49,7 +49,7 @@
       "Anime",
       "Movies"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.animexin.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.animexin.sky"
   },
   {
     "packageName": "com.arranoust.animo",
@@ -66,7 +66,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.animo.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.animo.sky"
   },
   {
     "packageName": "com.arranoust.anizone",
@@ -83,7 +83,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.anizone.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.anizone.sky"
   },
   {
     "packageName": "com.arranoust.idlix",
@@ -101,7 +101,7 @@
       "Movies",
       "Series"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.idlix.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.idlix.sky"
   },
   {
     "packageName": "com.arranoust.layarkaca",
@@ -125,7 +125,25 @@
       "Movies",
       "Series"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.layarkaca.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.layarkaca.sky"
+  },
+  {
+    "packageName": "com.arranoust.moviebox",
+    "name": "Moviebox",
+    "version": 9,
+    "baseUrl": "https://themoviebox.org",
+    "description": "Moviebox - Nonton Film & Series Subtitle Indonesia",
+    "authors": [
+      "alfanthariq"
+    ],
+    "languages": [
+      "id"
+    ],
+    "categories": [
+      "Movies",
+      "Series"
+    ],
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.moviebox.sky"
   },
   {
     "packageName": "com.arranoust.otakudesu",
@@ -142,7 +160,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.otakudesu.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.otakudesu.sky"
   },
   {
     "packageName": "com.arranoust.samehadaku",
@@ -159,7 +177,7 @@
     "categories": [
       "Anime"
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.samehadaku.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.samehadaku.sky"
   },
   {
     "packageName": "com.arranoust.torrentio",
@@ -191,6 +209,6 @@
         "baseUrl": "https://torrentio.strem.fun/providers=nyaasi,tokyotosho,anidex%7Csort=seeders"
       }
     ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.torrentio.sky"
+    "url": "https://raw.githubusercontent.com/alfanthariq/MiraiExt-SkyStream/main/dist/com.arranoust.torrentio.sky"
   }
 ]
