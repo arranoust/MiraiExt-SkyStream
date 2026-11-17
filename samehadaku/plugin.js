@@ -1,4 +1,6 @@
-import { PixelDrain } from 'skystream-extractors';
+// Direct dist path: the deploy bundler uses esbuild platform "neutral", which
+// ignores the package "main" field and cannot resolve the bare package name.
+import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js';
 
 (function () {
 
