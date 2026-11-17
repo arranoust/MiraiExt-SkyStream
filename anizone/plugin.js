@@ -7,7 +7,13 @@
         'Accept-Language': 'en-US,en;q=0.5'
     };
 
-    var HOSTNAME = (function () { try { return new URL(manifest.baseUrl).hostname; } catch (_) { return 'anizone.to'; } })();
+    var BASE = String(manifest.baseUrl || 'https://anizone.to').replace(/\/+$/, '');
+    var HOSTNAME = (function () {
+        try {
+            var m = BASE.match(/^https?:\/\/([^\/]+)/i);
+            return m ? m[1] : 'anizone.to';
+        } catch (_) { return 'anizone.to'; }
+    })();
     var DOMAIN_REGEX = HOSTNAME.replace(/\./g, '\\.');
 
     var HOME_CATEGORIES = [
@@ -17,7 +23,16 @@
         { name: 'Web',       type: '6' }
     ];
 
-    // ─── Helpers ──────────────────────────────────────────────────────────────
+    // Livewire episode pagination budget. SkyStream allows ~90s per function.
+    var EPISODE_TIME_BUDGET_MS = 75000;
+    var MAX_EPISODE_PAGES = 60;
+
+    // ─── Errors ───────────────────────────────────────────────────────────────
+    function fail(code, message) {
+        return { success: false, errorCode: code, message: message, error: message };
+    }
+
+    // ─── Generic helpers ──────────────────────────────────────────────────────
     function getBody(res) {
         if (!res) return '';
         if (typeof res === 'string') return res;
@@ -25,261 +40,321 @@
         return String(res);
     }
 
-    async function parseHtml(html, selector, attrType) {
-        try {
-            var raw = await parse_html(html, selector, attrType);
-            if (!Array.isArray(raw)) return [];
-            return raw.map(function (item) {
-                if (!item) return '';
-                if (typeof item === 'string') return item;
-                if (attrType === 'text') return item.text || '';
-                return item.attr || item[attrType] || '';
-            });
-        } catch (_) { return []; }
+    function decodeEntities(s) {
+        if (!s) return '';
+        return String(s)
+            .replace(/&quot;/g, '"')
+            .replace(/&apos;|&#0?39;|&#x27;/gi, "'")
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&#x([0-9a-f]+);/gi, function (_, h) { return String.fromCharCode(parseInt(h, 16)); })
+            .replace(/&#(\d+);/g, function (_, d) { return String.fromCharCode(parseInt(d, 10)); });
     }
 
-    // ─── HLS variant parser ───────────────────────────────────────────────────
-    function resolveUrl(base, relative) {
-        if (!relative) return base;
-        if (relative.indexOf('http') === 0) return relative;
-        if (relative.indexOf('//') === 0) return 'https:' + relative;
-        if (relative.indexOf('/') === 0) {
-            var end = base.indexOf('://') + 3;
-            var hostEnd = base.indexOf('/', end);
-            if (hostEnd === -1) hostEnd = base.length;
-            return base.slice(0, hostEnd) + relative;
-        }
-        var slash = base.lastIndexOf('/');
-        return (slash > 8 ? base.slice(0, slash + 1) : base + '/') + relative;
-    }
-
-    // Returns { variants: [{url, height, bandwidth, label, infLine}], mediaLines: string[] }
-    // mediaLines: resolved #EXT-X-MEDIA lines (audio/subtitles groups)
-    // infLine: original #EXT-X-STREAM-INF line (preserved for mini-master reconstruction)
-    function parseHlsMaster(content, baseUrl) {
-        if (!content || content.indexOf('#EXTM3U') === -1) return null;
-        var variants  = [];
-        var mediaLines = [];
-        var lines = content.split('\n');
-        var inf   = null;
-        var hasStreamInf = false;
-
-        for (var i = 0; i < lines.length; i++) {
-            var line = lines[i].trim();
-            if (!line) continue;
-
-            if (line.indexOf('#EXT-X-MEDIA') === 0) {
-                // Resolve URI= in the media line to absolute URL
-                var resolved = line.replace(/URI="([^"]+)"/, function (_, uri) {
-                    return 'URI="' + resolveUrl(baseUrl, uri) + '"';
-                });
-                mediaLines.push(resolved);
-            } else if (line.indexOf('#EXT-X-STREAM-INF') === 0) {
-                hasStreamInf = true;
-                var resM = line.match(/RESOLUTION=(\d+)x(\d+)/);
-                var bwM  = line.match(/[^-]BANDWIDTH=(\d+)\b/);
-                inf = {
-                    height:    resM ? parseInt(resM[2], 10) : 0,
-                    bandwidth: bwM  ? parseInt(bwM[1], 10)  : 0,
-                    infLine:   line
-                };
-            } else if (line.indexOf('#') === 0) {
-                continue;
-            } else if (inf) {
-                var vUrl = line.indexOf('http') === 0 ? line : resolveUrl(baseUrl, line);
-                var h    = inf.height;
-                var label = h >= 2160 ? '4K' : h >= 1080 ? '1080p' : h >= 720 ? '720p' : h >= 480 ? '480p' : h >= 360 ? '360p' : (h ? h + 'p' : 'Auto');
-                variants.push({ url: vUrl, height: h, bandwidth: inf.bandwidth, label: label, infLine: inf.infLine });
-                inf = null;
+    // The site embeds data as JSON inside single-quoted JS literals:
+    //   items: JSON.parse('[{\u0022url\u0022: \u0022http:\\\/\\\/anizone.to\/...\u0022}]')
+    // One JS-string unescape pass is required before JSON.parse, otherwise the
+    // double-escaped slashes end up as literal backslashes in every URL.
+    function jsUnescape(s) {
+        if (!s) return '';
+        return String(s).replace(/\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)/g, function (_, e) {
+            if (e.charAt(0) === 'u' && e.length === 5) return String.fromCharCode(parseInt(e.slice(1), 16));
+            if (e.charAt(0) === 'x' && e.length === 3) return String.fromCharCode(parseInt(e.slice(1), 16));
+            switch (e) {
+                case 'n': return '\n';
+                case 'r': return '\r';
+                case 't': return '\t';
+                case 'b': return '\b';
+                case 'f': return '\f';
+                case 'v': return '\v';
+                default: return e;
             }
-        }
-
-        variants.sort(function (a, b) { return b.height - a.height; });
-        return variants.length > 0 && hasStreamInf ? { variants, mediaLines } : null;
+        });
     }
 
-    // Reconstruct a mini master playlist for a single variant that includes audio groups.
-    // Served via magic_m3u8 so the player gets both video + audio tracks.
-    function buildMiniMaster(variant, mediaLines) {
-        var lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
-        mediaLines.forEach(function (l) { lines.push(l); });
-        lines.push(variant.infLine);
-        lines.push(variant.url);
-        return 'magic_m3u8:' + btoa(lines.join('\n'));
-    }
-
-    // ─── Title parsing ────────────────────────────────────────────────────────
-    function parseAnmTitles(raw) {
-        var s = raw.replace(/\\u0022/g, '"');
+    function parseJsonLiteral(raw) {
+        if (!raw) return null;
+        var s = jsUnescape(decodeEntities(raw));
         try { return JSON.parse(s); } catch (_) {}
-        try { return JSON.parse(s.replace(/:""([^"]*)""/g, ':"$1"')); } catch (_) {}
-        return null;
+        try { return JSON.parse(decodeEntities(raw)); } catch (_) { return null; }
     }
 
-    function decodeTitle(str) {
-        if (!str) return '';
-        return str
-            .replace(/\\u([0-9a-fA-F]{4})/g, function (_, hex) { return String.fromCharCode(parseInt(hex, 16)); })
-            .replace(/\\\//g, '/').replace(/\\'/g, "'").replace(/\\"/g, '"')
-            .replace(/^"+|"+$/g, '').trim();
+    function parseJsonCall(html, pattern) {
+        if (!html) return null;
+        var m = html.match(pattern);
+        return m ? parseJsonLiteral(m[1]) : null;
     }
 
-    function pickTitle(titles) {
-        if (!titles || typeof titles !== 'object') return '';
-        var t = titles['1'] || titles['2'] || titles['5'] || titles['10'];
-        if (!t) { var keys = Object.keys(titles); for (var i = 0; i < keys.length; i++) { if (titles[keys[i]]) { t = titles[keys[i]]; break; } } }
-        return decodeTitle(t);
+    function normalizeUrl(u) {
+        if (!u) return '';
+        return String(u).replace(/^http:\/\//i, 'https://');
     }
 
-    function extractTitle(block) {
-        var m = block.match(/anmTitles:\s*JSON\.parse\('([\s\S]+?)'\)/);
-        if (m) { var p = parseAnmTitles(m[1]); if (p) return pickTitle(p); }
-        var fb = block.match(/window\.getTitle\s*\([^,)]+,\s*'([^']+)'\s*\)/);
-        if (fb) return decodeTitle(fb[1].replace(/&quot;/g, '"'));
+    function stripTags(s) {
+        return decodeEntities(String(s || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, ''));
+    }
+
+    function pickTitle(titles, fallback) {
+        if (!titles || typeof titles !== 'object') return fallback || '';
+        var keys = ['main_title', '5', '1', '2', '8', '10'];
+        for (var i = 0; i < keys.length; i++) {
+            if (titles[keys[i]]) return String(titles[keys[i]]);
+        }
+        var all = Object.keys(titles);
+        for (var j = 0; j < all.length; j++) {
+            if (titles[all[j]]) return String(titles[all[j]]);
+        }
+        return fallback || '';
+    }
+
+    function extractTitle(html) {
+        var titles = parseJsonCall(html, /anmTitles:\s*JSON\.parse\('([\s\S]+?)'\)/);
+        if (titles) {
+            var t = pickTitle(titles);
+            if (t) return t;
+        }
+        var fb = html.match(/window\.getTitle\s*\([^,)]+,\s*'([^']+)'\s*\)/);
+        if (fb) return jsUnescape(fb[1]);
+        var titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+        if (titleTag) return stripTags(titleTag[1]).replace(/\s*[\|\-–—]\s*AniZone.*$/i, '').trim();
         return '';
     }
 
-    // ─── Livewire session ─────────────────────────────────────────────────────
-    async function initLivewire() {
-        var res  = await http_get(manifest.baseUrl + '/anime', HEADERS);
-        var html = getBody(res);
+    // ─── Cookie jar (SkyStream has no automatic cookie jar) ───────────────────
+    var cookieJar = {};
 
-        var tokenMatch = html.match(/<script[^>]+data-csrf="([^"]+)"/);
+    function absorbCookies(res) {
+        var headers = (res && res.headers) || {};
+        var raw = headers['set-cookie'] || headers['Set-Cookie'];
+        if (!raw) return;
+        var lines = Array.isArray(raw) ? raw : [raw];
+        for (var i = 0; i < lines.length; i++) {
+            if (!lines[i]) continue;
+            // Split comma-separated cookies, but not the comma inside Expires=Tue, ...
+            var parts = String(lines[i]).split(/,(?=\s*[^;,=\s]+\s*=)/);
+            for (var j = 0; j < parts.length; j++) {
+                var pair = parts[j].split(';')[0].trim();
+                var eq = pair.indexOf('=');
+                if (eq <= 0) continue;
+                var name = pair.slice(0, eq).trim();
+                if (name) cookieJar[name] = pair.slice(eq + 1).trim();
+            }
+        }
+    }
+
+    function cookieHeader() {
+        var out = [];
+        for (var k in cookieJar) {
+            if (Object.prototype.hasOwnProperty.call(cookieJar, k)) out.push(k + '=' + cookieJar[k]);
+        }
+        return out.join('; ');
+    }
+
+    async function httpGet(url, extra) {
+        var headers = {};
+        for (var k in HEADERS) if (Object.prototype.hasOwnProperty.call(HEADERS, k)) headers[k] = HEADERS[k];
+        if (extra) for (var e in extra) if (Object.prototype.hasOwnProperty.call(extra, e)) headers[e] = extra[e];
+        var res = await http_get(url, headers);
+        absorbCookies(res);
+        return getBody(res);
+    }
+
+    async function httpPost(url, headers, body) {
+        var res = await http_post(url, headers, body);
+        absorbCookies(res);
+        return getBody(res);
+    }
+
+    // ─── Livewire session ─────────────────────────────────────────────────────
+    function wireFromHtml(html, url, componentName) {
+        var tokenMatch = html.match(/<script[^>]+data-csrf="([^"]+)"/) ||
+                         html.match(/<meta[^>]+name="csrf-token"[^>]+content="([^"]+)"/);
         if (!tokenMatch) return null;
 
-        var cookie = '';
-        var raw = res.headers && (res.headers['set-cookie'] || res.headers['Set-Cookie']);
-        if (Array.isArray(raw)) cookie = raw.map(function (c) { return c.split(';')[0]; }).join('; ');
-        else if (typeof raw === 'string') cookie = raw.split(';')[0];
-
-        var snapshots = [];
         var re = /wire:snapshot="([^"]+)"/g;
         var m;
+        var snapshots = [];
         while ((m = re.exec(html)) !== null) {
+            var snap = decodeEntities(m[1]);
             try {
-                var snap = m[1].replace(/&quot;/g, '"');
                 var parsed = JSON.parse(snap);
-                if (parsed?.memo?.name) snapshots.push({ name: parsed.memo.name, snap });
+                if (parsed && parsed.memo && parsed.memo.name) snapshots.push({ name: parsed.memo.name, snap: snap });
             } catch (_) {}
         }
 
-        var target = snapshots.find(function (s) { return s.name === 'pages.anime-index'; })
-                  || snapshots.find(function (s) { return /anime.index|anime-index/i.test(s.name); })
-                  || snapshots[0];
-
+        var target = null;
+        for (var i = 0; i < snapshots.length; i++) {
+            if (snapshots[i].name === componentName) { target = snapshots[i]; break; }
+        }
+        if (!target) {
+            for (var j = 0; j < snapshots.length; j++) {
+                if (new RegExp(componentName.replace(/\./g, '\\.'), 'i').test(snapshots[j].name)) {
+                    target = snapshots[j]; break;
+                }
+            }
+        }
         if (!target) return null;
-        return { snapshot: target.snap, token: tokenMatch[1], cookie };
+        return { snapshot: target.snap, token: tokenMatch[1], url: url };
+    }
+
+    async function initLivewire(url, componentName) {
+        var html = await httpGet(url);
+        return wireFromHtml(html, url, componentName);
     }
 
     async function livewireUpdate(wire, updates, calls) {
         var payload = JSON.stringify({
-            _token:     wire.token,
-            components: [{ snapshot: wire.snapshot, updates: updates, calls: calls || [] }]
+            _token: wire.token,
+            components: [{
+                snapshot: wire.snapshot,
+                updates: updates || {},
+                calls: calls || []
+            }]
         });
         var headers = {
-            'User-Agent':   UA,
+            'User-Agent': UA,
             'Content-Type': 'application/json',
-            'Accept':       'application/json, text/plain, */*',
-            'X-Livewire':   'true',
-            'Referer':      manifest.baseUrl + '/anime',
-            'Origin':       manifest.baseUrl
+            'Accept': 'application/json, text/plain, */*',
+            'X-Livewire': 'true',
+            'X-CSRF-TOKEN': wire.token,
+            'Referer': wire.url,
+            'Origin': BASE
         };
-        if (wire.cookie) headers['Cookie'] = wire.cookie;
+        var ck = cookieHeader();
+        if (ck) headers['Cookie'] = ck;
 
-        var res  = getBody(await http_post(manifest.baseUrl + '/livewire/update', headers, payload));
-        var json;
-        try { json = JSON.parse(res); } catch (e) {
-            console.error('AniZone: Livewire response malformed:', e);
-            return '';
+        var res = await httpPost(BASE + '/livewire/update', headers, payload);
+        var text = res;
+        var json = null;
+        try { json = JSON.parse(text); } catch (_) {}
+
+        if (!json) {
+            var statusMatch = String(text).match(/"message"\s*:\s*"([^"]+)"/);
+            throw new Error('Livewire returned a non-JSON response' +
+                (statusMatch ? ' (' + statusMatch[1] + ')' : ''));
         }
-        var comp = json.components[0];
-        wire.snapshot = comp.snapshot;
-        var newCookie = json.components[0]?.effects?.xdata?.cookie;
-        if (newCookie) wire.cookie = newCookie;
-        return comp.effects.html;
+        var comp = json.components && json.components[0];
+        if (!comp || !comp.effects) {
+            throw new Error('Livewire response has no component effects' +
+                (json.message ? ' (' + json.message + ')' : ''));
+        }
+        if (comp.snapshot) wire.snapshot = comp.snapshot;
+        return {
+            html: comp.effects.html || '',
+            dispatches: comp.effects.dispatches || []
+        };
     }
 
     // ─── Parsers ──────────────────────────────────────────────────────────────
     function parseAnimeCards(html) {
-        var items = [];
-        var parts = html.split(/x-data="\{\s*\n?\s*anmTitles:/);
-        for (var i = 1; i < parts.length; i++) {
-            var block = parts[i];
-            var title = extractTitle('anmTitles:' + block);
-            if (!title) continue;
-            var hrefM = block.match(new RegExp('href="(https?://' + DOMAIN_REGEX + '/anime/[a-z0-9]+)"', 'i'));
-            if (!hrefM || /\/anime\/[a-z0-9]+\/\d+/i.test(hrefM[1])) continue;
-            var imgM = block.match(new RegExp('src="(https?://' + DOMAIN_REGEX + '/images/anime/[^"]+)"', 'i'));
-            items.push(new MultimediaItem({
-                title:     title,
-                url:       hrefM[1],
-                posterUrl: imgM ? imgM[1] : '',
-                type:      'anime'
+        var list = parseJsonCall(html, /items:\s*JSON\.parse\('([\s\S]+?)'\)/);
+        if (!Array.isArray(list)) return [];
+        var out = [];
+        var seen = {};
+        for (var i = 0; i < list.length; i++) {
+            var a = list[i];
+            if (!a) continue;
+            var url = normalizeUrl(a.url);
+            if (!url || seen[url]) continue;
+            seen[url] = true;
+            out.push(new MultimediaItem({
+                title: a.main_title || pickTitle(a.title_list),
+                url: url,
+                posterUrl: normalizeUrl(a.cover) || '',
+                type: 'anime',
+                year: a.start_year || undefined,
+                status: a.is_ongoing ? 'ongoing' : 'completed'
             }));
         }
-        return items;
+        return out;
     }
 
-    function parseEpisodeList(html, poster) {
-        var eps   = [];
-        var parts = html.split(/<li\s+x-data="/i).slice(1);
-        for (var i = 0; i < parts.length; i++) {
-            var block = parts[i];
-            var epM   = block.match(new RegExp('href="(https?://' + DOMAIN_REGEX + '/anime/[a-z0-9]+/(\\d+))"', 'i'));
-            if (!epM) continue;
-            var epNum  = parseInt(epM[2], 10);
-            var thumbM = block.match(/\bsrc="(https?:\/\/[^"]+\/snapshot\.webp)"/i) || block.match(/\bsrc="(https?:\/\/[^"]+\.webp)"/i);
-            var h3M    = block.match(/<h3[^>]*>\s*([^<]+?)\s*<\/h3>/i);
-            var dateM  = block.match(/(\d{4}-\d{2}-\d{2})/);
-            var name   = (h3M && h3M[1].trim() !== 'Untitled') ? h3M[1].trim() : 'Episode ' + epNum;
-            eps.push(new Episode({
-                name:      name,
-                url:       epM[1],
-                season:    1,
-                episode:   epNum,
+    function parseEpisodes(data, poster) {
+        if (!Array.isArray(data)) return [];
+        var out = [];
+        var seen = {};
+        for (var i = 0; i < data.length; i++) {
+            var ep = data[i];
+            if (!ep) continue;
+            var url = normalizeUrl(ep.url);
+            if (!url || seen[url]) continue;
+            seen[url] = true;
+            var num = parseInt(ep.slug, 10);
+            if (isNaN(num)) num = i + 1;
+            out.push(new Episode({
+                name: pickTitle(ep.title_list, 'Episode ' + num),
+                url: url,
+                season: 1,
+                episode: num,
                 dubStatus: 'subbed',
-                posterUrl: thumbM ? thumbM[1] : poster,
-                airDate:   dateM ? dateM[1] : ''
+                posterUrl: normalizeUrl(ep.snapshot) || poster || '',
+                airDate: ep.air_date || '',
+                description: ep.summary || ''
             }));
         }
-        return eps;
+        out.sort(function (a, b) { return (a.episode || 0) - (b.episode || 0); });
+        return out;
     }
 
-    async function fetchAllEpisodes(url, firstHtml, poster) {
-        var episodes = parseEpisodeList(firstHtml, poster);
-        var totalM   = firstHtml.match(/of\s*<[^>]+>\s*([\d,]+)\s*<\/[^>]+>\s*results/i);
-        var total    = totalM ? parseInt(totalM[1].replace(/,/g, ''), 10) : 0;
-        var perPage  = episodes.length || 36;
-        var pages    = total > 0 ? Math.ceil(total / perPage) : 1;
+    function episodeCursor(html) {
+        var m = html.match(/nextCursor:\s*'([^']+)'/);
+        return m ? m[1] : '';
+    }
 
-        if (pages > 1) {
-            var pageUrls = [];
-            for (var p = 2; p <= pages; p++) pageUrls.push(url + '?page=' + p);
-            var more = await Promise.all(pageUrls.map(async function (u) {
-                try { return parseEpisodeList(getBody(await http_get(u, HEADERS)), poster); }
-                catch (_) { return []; }
-            }));
-            more.forEach(function (eps) { episodes = episodes.concat(eps); });
+    function findDispatch(dispatches, name) {
+        if (!Array.isArray(dispatches)) return null;
+        for (var i = 0; i < dispatches.length; i++) {
+            if (dispatches[i] && dispatches[i].name === name) return dispatches[i].params || {};
+        }
+        return null;
+    }
+
+    async function fetchAllEpisodes(html, poster, wire) {
+        var episodes = parseEpisodes(parseJsonCall(html, /items:\s*JSON\.parse\('([\s\S]+?)'\)/), poster);
+        var cursor = episodeCursor(html);
+        var hasMore = /hasMore:\s*true/.test(html);
+        var deadline = Date.now() + EPISODE_TIME_BUDGET_MS;
+        var pages = 0;
+
+        while (hasMore && cursor && pages < MAX_EPISODE_PAGES && Date.now() < deadline) {
+            try {
+                var r = await livewireUpdate(wire, {}, [
+                    { path: '', method: 'loadPage', params: [cursor] }
+                ]);
+                var batch = findDispatch(r.dispatches, 'items-loaded');
+                if (!batch || !Array.isArray(batch.items)) break;
+                episodes = episodes.concat(parseEpisodes(batch.items, poster));
+                cursor = batch.nextCursor || '';
+                hasMore = !!batch.hasMore && !!cursor;
+                pages++;
+            } catch (_) { break; }
         }
 
-        episodes.sort(function (a, b) { return a.episode - b.episode; });
-        return episodes;
+        // Final dedupe after merging pages.
+        var seen = {};
+        var unique = [];
+        episodes.forEach(function (ep) {
+            if (!seen[ep.url]) { seen[ep.url] = true; unique.push(ep); }
+        });
+        unique.sort(function (a, b) { return (a.episode || 0) - (b.episode || 0); });
+        return unique;
     }
 
-    // ─── AniList ──────────────────────────────────────────────────────────────
     async function getAniListData(title) {
         if (!title) return null;
         try {
-            var res   = await http_post('https://graphql.anilist.co',
+            var res = await http_post('https://graphql.anilist.co',
                 { 'Content-Type': 'application/json', Accept: 'application/json' },
                 JSON.stringify({ query: 'query($s:String){Media(search:$s,type:ANIME){id idMal}}', variables: { s: title } })
             );
-            var data  = typeof res?.body === 'string' ? JSON.parse(res.body) : res?.body;
-            var media = data?.data?.Media;
+            var data = JSON.parse(getBody(res));
+            var media = data && data.data && data.data.Media;
             if (!media) return null;
             return {
-                anilistId: media.id    ? String(media.id)    : null,
-                idMal:     media.idMal ? String(media.idMal) : null
+                anilistId: media.id ? String(media.id) : null,
+                idMal: media.idMal ? String(media.idMal) : null
             };
         } catch (_) { return null; }
     }
@@ -287,138 +362,141 @@
     // ─── getHome ──────────────────────────────────────────────────────────────
     async function getHome(cb) {
         try {
-            var wire = await initLivewire();
-            if (!wire) return cb({ success: false, error: 'Failed to init Livewire.' });
-
-            await livewireUpdate(wire, { sort: 'release-desc' }, []);
+            var wire = await initLivewire(BASE + '/anime', 'pages.anime-index');
+            if (!wire) return cb(fail('INIT_FAILED', 'Gagal memulai sesi Livewire AniZone.'));
 
             var result = {};
+            var trending = await livewireUpdate(wire, { type: '0', sort: 'added-desc' }, []);
+            var trendingItems = parseAnimeCards(trending.html);
+            if (trendingItems.length) result.Trending = trendingItems;
+
             for (var i = 0; i < HOME_CATEGORIES.length; i++) {
                 var cat = HOME_CATEGORIES[i];
                 try {
-                    var html  = await livewireUpdate(wire, { type: cat.type },
-                        [{ path: '', method: 'loadMore', params: [] }]);
-                    var items = parseAnimeCards(html);
+                    var r = await livewireUpdate(wire, { type: cat.type, sort: 'release-desc' }, []);
+                    var items = parseAnimeCards(r.html);
                     if (items.length) result[cat.name] = items;
                 } catch (_) {}
             }
 
-            if (!Object.keys(result).length) return cb({ success: false, error: 'No content found.' });
+            if (!Object.keys(result).length) {
+                return cb(fail('NO_CONTENT', 'Tidak ada konten AniZone yang bisa dimuat.'));
+            }
             cb({ success: true, data: result });
-        } catch (e) { cb({ success: false, error: String(e) }); }
+        } catch (e) {
+            cb(fail('LIVEWIRE_ERROR', 'Gagal memuat beranda AniZone: ' + String(e && e.message ? e.message : e)));
+        }
     }
 
     // ─── search ───────────────────────────────────────────────────────────────
     async function search(query, cb) {
         try {
-            var wire = await initLivewire();
-            if (!wire) return cb({ success: false, error: 'Failed to init Livewire.' });
-            var html = await livewireUpdate(wire, { search: query }, []);
-            cb({ success: true, data: parseAnimeCards(html) });
-        } catch (e) { cb({ success: false, error: String(e) }); }
+            if (!query) return cb({ success: true, data: [] });
+            var wire = await initLivewire(BASE + '/anime', 'pages.anime-index');
+            if (!wire) return cb(fail('INIT_FAILED', 'Gagal memulai sesi Livewire AniZone.'));
+            var r = await livewireUpdate(wire, { search: query }, []);
+            cb({ success: true, data: parseAnimeCards(r.html) });
+        } catch (e) {
+            cb(fail('LIVEWIRE_ERROR', 'Gagal mencari di AniZone: ' + String(e && e.message ? e.message : e)));
+        }
     }
 
     // ─── load ─────────────────────────────────────────────────────────────────
     async function load(url, cb) {
         try {
-            url = url.replace(/\/anime\/([a-z0-9]+)\/\d+$/i, '/anime/$1');
-            var html = getBody(await http_get(url, HEADERS));
-            if (!html) return cb({ success: false, error: 'Failed to load anime detail HTML.' });
+            url = normalizeUrl(url).replace(/\/anime\/([a-z0-9]+)\/\d+$/i, '/anime/$1');
+            var html = await httpGet(url);
+            if (!html) return cb(fail('NOT_FOUND', 'Halaman detail AniZone tidak bisa dimuat.'));
 
-            var animeTitle = extractTitle(html);
-            if (!animeTitle) {
-                var ogTitle = (await parseHtml(html, 'meta[property="og:title"]', 'content'))[0];
-                if (ogTitle) animeTitle = ogTitle.replace(/\s*[\|\-–—]\s*AniZone.*$/i, '').trim();
-            }
-            if (!animeTitle) {
-                var pageTitle = (await parseHtml(html, 'title', 'text'))[0];
-                if (pageTitle) animeTitle = pageTitle.replace(/\s*[\|\-–—]\s*AniZone.*$/i, '').trim();
-            }
-            if (!animeTitle) animeTitle = 'No Title';
+            var animeTitle = extractTitle(html) || 'No Title';
+            var poster = normalizeUrl((html.match(/src="(https?:\/\/[^"]*\/images\/anime\/[^"]+)"/i) || [])[1]) || '';
 
-            var poster    = (await parseHtml(html, 'img[src*="/images/anime/"]', 'src'))[0] || '';
-            var synopsis  = ((await parseHtml(html, '.text-slate-100.text-center div', 'text'))[0] || '').trim() || 'No description available.';
-            var isOngoing = /ongoing/i.test(html);
+            var synopsis = '';
+            var synopsisMatch = html.match(/Synopsis<\/h3>\s*<div[^>]*>([\s\S]*?)<\/div>/i);
+            if (synopsisMatch) synopsis = stripTags(synopsisMatch[1]).trim();
+            if (!synopsis) synopsis = 'No description available.';
 
-            var [aniListData, episodes] = await Promise.all([
-                getAniListData(animeTitle),
-                fetchAllEpisodes(url, html, poster)
-            ]);
+            var isOngoing = /<span[^>]*>\s*Ongoing\s*<\/span>/i.test(html);
+
+            var wire = wireFromHtml(html, url, 'pages.anime-detail');
+            var tasks = [getAniListData(animeTitle)];
+            if (wire) tasks.push(fetchAllEpisodes(html, poster, wire));
+            else tasks.push(Promise.resolve(parseEpisodes(parseJsonCall(html, /items:\s*JSON\.parse\('([\s\S]+?)'\)/), poster)));
+
+            var results = await Promise.all(tasks);
+            var aniListData = results[0];
+            var episodes = results[1] || [];
 
             var syncData = {};
-            if (aniListData?.idMal)     syncData.mal     = aniListData.idMal;
-            if (aniListData?.anilistId) syncData.anilist = aniListData.anilistId;
+            if (aniListData && aniListData.idMal) syncData.mal = aniListData.idMal;
+            if (aniListData && aniListData.anilistId) syncData.anilist = aniListData.anilistId;
 
             cb({
                 success: true,
                 data: new MultimediaItem({
-                    title:       animeTitle,
-                    url,
-                    posterUrl:   poster,
-                    type:        'anime',
-                    status:      isOngoing ? 'ongoing' : 'completed',
+                    title: animeTitle,
+                    url: url,
+                    posterUrl: poster,
+                    type: 'anime',
+                    status: isOngoing ? 'ongoing' : 'completed',
                     description: synopsis,
-                    episodes,
-                    syncData:    Object.keys(syncData).length ? syncData : undefined
+                    episodes: episodes,
+                    syncData: Object.keys(syncData).length ? syncData : undefined
                 })
             });
-        } catch (e) { cb({ success: false, error: String(e) }); }
+        } catch (e) {
+            cb(fail('PARSE_ERROR', 'Gagal memuat detail AniZone: ' + String(e && e.message ? e.message : e)));
+        }
     }
 
-    // ─── loadStreams ───────────────────────────────────────────────────────────
+    // ─── loadStreams ──────────────────────────────────────────────────────────
     async function loadStreams(url, cb) {
         try {
-            var html = getBody(await http_get(url, HEADERS));
-            if (!html) return cb({ success: false, error: 'Failed to load episode HTML.' });
+            var html = await httpGet(normalizeUrl(url), { Referer: BASE + '/' });
+            if (!html) return cb(fail('NOT_FOUND', 'Halaman episode AniZone tidak bisa dimuat.'));
 
-            var m3u8Url = (await parseHtml(html, 'media-player[src]', 'src'))[0];
-            if (!m3u8Url) return cb({ success: false, error: 'Stream not found.' });
-
-            var subSrcs   = await parseHtml(html, 'track[kind="subtitles"]', 'src');
-            var subLabels = await parseHtml(html, 'track[kind="subtitles"]', 'label');
-            var subLangs  = await parseHtml(html, 'track[kind="subtitles"]', 'srclang');
-
-            var subtitles = subSrcs.reduce(function (acc, src, i) {
-                if (src) acc.push({ url: src, label: subLabels[i] || ('Sub ' + i), lang: subLangs[i] || 'und' });
-                return acc;
-            }, []);
-
-            var m3u8Body = '';
-            try { m3u8Body = getBody(await http_get(m3u8Url, { ...HEADERS, Referer: manifest.baseUrl + '/' })); } catch (_) {}
-
-            var master = m3u8Body ? parseHlsMaster(m3u8Body, m3u8Url) : null;
-
-            if (master && master.variants.length > 1) {
-                var streams = master.variants.map(function (v) {
-                    var url = master.mediaLines.length ? buildMiniMaster(v, master.mediaLines) : v.url;
-                    return new StreamResult({
-                        url:       url,
-                        quality:   v.label,
-                        source:    'AniZone | ' + v.label,
-                        headers:   { Referer: manifest.baseUrl + '/' },
-                        subtitles: subtitles.length ? subtitles : undefined
-                    });
-                });
-                return cb({ success: true, data: streams });
+            var players = [];
+            var re = /vidstackPlayer\(JSON\.parse\('([\s\S]+?)'\)\)/g;
+            var m;
+            while ((m = re.exec(html)) !== null) {
+                var p = parseJsonLiteral(m[1]);
+                if (p && p.src && /\.m3u8/i.test(p.src)) players.push(p);
             }
 
-            cb({
-                success: true,
-                data: [new StreamResult({
-                    url:       m3u8Url,
-                    quality:   master && master.variants[0] ? master.variants[0].label : 'Auto',
-                    source:    'AniZone',
-                    headers:   { Referer: manifest.baseUrl + '/' },
-                    subtitles: subtitles.length ? subtitles : undefined
-                })]
+            if (!players.length) {
+                var decoded = jsUnescape(decodeEntities(html));
+                var fbRe = /"src":"(https?:\/\/[^"]+\.m3u8)"/g;
+                while ((m = fbRe.exec(decoded)) !== null) players.push({ src: m[1] });
+            }
+
+            if (!players.length) return cb(fail('NOT_FOUND', 'Stream tidak ditemukan di halaman episode AniZone.'));
+
+            var streams = players.map(function (p, i) {
+                var subs = [];
+                var rawSubs = Array.isArray(p.subtitles) ? p.subtitles : [];
+                for (var j = 0; j < rawSubs.length; j++) {
+                    var s = rawSubs[j];
+                    if (s && s.file) subs.push({ url: s.file, label: s.title || ('Subtitle ' + (j + 1)), lang: s.language || 'und' });
+                }
+                return new StreamResult({
+                    url: p.src,
+                    quality: 'Auto',
+                    source: players.length > 1 ? 'AniZone | Video ' + (i + 1) : 'AniZone',
+                    headers: { Referer: BASE + '/' },
+                    subtitles: subs.length ? subs : undefined
+                });
             });
-        } catch (e) { cb({ success: false, error: String(e) }); }
+
+            cb({ success: true, data: streams });
+        } catch (e) {
+            cb(fail('PARSE_ERROR', 'Gagal memuat stream AniZone: ' + String(e && e.message ? e.message : e)));
+        }
     }
 
     // ─── Expose ───────────────────────────────────────────────────────────────
-    globalThis.getHome    = getHome;
-    globalThis.search     = search;
-    globalThis.load       = load;
+    globalThis.getHome = getHome;
+    globalThis.search = search;
+    globalThis.load = load;
     globalThis.loadStreams = loadStreams;
 
 })();
