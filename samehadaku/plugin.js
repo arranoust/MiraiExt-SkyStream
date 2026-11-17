@@ -48,12 +48,14 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
             .trim();
     }
 
-    function normalizeTitle(t) {
-        return cleanTitle(t)
-            .replace(/\b(?:cour|season|part)\s*\d+\b/gi, '')
-            .replace(/\b(?:the\s+)?(?:movie|film)\b/gi, '')
-            .replace(/\s+/g, ' ')
-            .trim();
+    // Samehadaku poster filenames carry the AniList ID, e.g.
+    // bx198727-xxxx-212x300.jpg or 148216-212x300.jpg. Using it avoids fuzzy
+    // title matching (which used to map "Cour 2" to season 1).
+    function extractAniListId(posterUrl) {
+        if (!posterUrl) return null;
+        var name = String(posterUrl).split('/').pop();
+        var m = name.match(/bx(\d+)-/i) || name.match(/^(\d{5,})-\d+x\d+/i);
+        return m ? m[1] : null;
     }
 
     function getStatus(t) {
@@ -170,38 +172,16 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
     // ─── PixelDrain (built-in extractor) ──────────────────────────────────────
 
     async function resolvePixelDrain(pageUrl, quality) {
-        var pages = [pageUrl];
-
-        // Built-in PixelDrain only handles /u/<id>. Samehadaku mainly uses /u/,
-        // but keep a small fallback for /l/<list-id> pages.
-        if (/\/l\//i.test(pageUrl)) {
-            try {
-                var res = await http_get(pageUrl, {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                    'Referer': manifest.baseUrl + '/'
-                });
-                var ids = [], m, re = /\/u\/([a-zA-Z0-9]+)/gi;
-                while ((m = re.exec(getBody(res))) !== null) {
-                    if (ids.indexOf(m[1]) === -1) ids.push(m[1]);
-                }
-                pages = ids.map(function (id) { return 'https://pixeldrain.com/u/' + id; });
-            } catch (_) { pages = []; }
-        }
-
-        var out = [];
-        for (var i = 0; i < pages.length; i++) {
-            try {
-                var links = await pixelDrain.getUrl(pages[i], pageUrl);
-                if (!links || !links.length || !links[0].url) continue;
-                out.push(new StreamResult({
-                    url: links[0].url,
-                    quality: quality,
-                    source: 'PixelDrain ' + quality,
-                    headers: links[0].headers || { Referer: pages[i] }
-                }));
-            } catch (_) { }
-        }
-        return out;
+        try {
+            var links = await pixelDrain.getUrl(pageUrl, pageUrl);
+            if (!links || !links.length || !links[0].url) return [];
+            return [new StreamResult({
+                url: links[0].url,
+                quality: quality,
+                source: 'PixelDrain ' + quality,
+                headers: links[0].headers || { Referer: pageUrl }
+            })];
+        } catch (_) { return []; }
     }
 
     // ─── Embed player (online streaming) ─────────────────────────────────────
@@ -259,7 +239,7 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
             var qMatch = block.match(/<strong>([^<]+?)\s*<\/strong>/i);
             if (!qMatch) continue;
             var quality = fixQuality(qMatch[1].trim());
-            var pd = block.match(/href="(https:\/\/pixeldrain\.com\/(?:u|l)\/[^"]+)"/i);
+            var pd = block.match(/href="(https:\/\/pixeldrain\.com\/u\/[^"]+)"/i);
             if (!pd) continue;
             try {
                 streams.push.apply(streams, await resolvePixelDrain(pd[1].replace(/&amp;/g, '&'), quality));
@@ -272,38 +252,62 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
 
     // ─── AniList / AniZip ─────────────────────────────────────────────────────
 
-    async function getAniListData(title) {
-        if (!title) return null;
-        var query = 'query($s:String){Media(search:$s,type:ANIME){id idMal title{romaji english native} bannerImage coverImage{extraLarge large} nextAiringEpisode{episode timeUntilAiring}characters(sort:ROLE,perPage:15){edges{role node{name{full}image{large}}}}}}';
+    var ANILIST_FIELDS = 'id idMal title{romaji english native} bannerImage coverImage{extraLarge large} '
+        + 'nextAiringEpisode{episode timeUntilAiring}'
+        + 'characters(sort:ROLE,perPage:15){edges{role node{name{full}image{large}}}}';
+
+    function mapAniListMedia(media) {
+        if (!media) return null;
+        return {
+            id: String(media.id),
+            idMal: media.idMal ? String(media.idMal) : null,
+            characters: media.characters?.edges ?? [],
+            nextAiring: media.nextAiringEpisode || null,
+            bannerUrl: media.bannerImage || null,
+            posterUrl: media.coverImage?.extraLarge || media.coverImage?.large || null,
+            title: pickTitle(media.title)
+        };
+    }
+
+    async function queryAniList(query, variables) {
         try {
             var res = await http_post('https://graphql.anilist.co',
                 { 'Content-Type': 'application/json', Accept: 'application/json' },
-                JSON.stringify({ query: query, variables: { s: title } })
+                JSON.stringify({ query: query, variables: variables })
             );
             var data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
-            var media = data?.data?.Media;
-            if (!media) return null;
-            return {
-                id: String(media.id),
-                idMal: media.idMal ? String(media.idMal) : null,
-                characters: media.characters?.edges ?? [],
-                nextAiring: media.nextAiringEpisode || null,
-                bannerUrl: media.bannerImage || null,
-                posterUrl: media.coverImage?.extraLarge || media.coverImage?.large || null,
-                title: pickTitle(media.title)
-            };
+            return mapAniListMedia(data?.data?.Media);
         } catch (_) { return null; }
     }
 
-    async function getAniZipByMalId(malId) {
-        if (!malId) return null;
+    function getAniListById(id) {
+        if (!id) return Promise.resolve(null);
+        return queryAniList(
+            'query($id:Int){Media(id:$id,type:ANIME){' + ANILIST_FIELDS + '}}',
+            { id: parseInt(id, 10) }
+        );
+    }
+
+    function getAniListByTitle(title) {
+        if (!title) return Promise.resolve(null);
+        return queryAniList(
+            'query($s:String){Media(search:$s,type:ANIME){' + ANILIST_FIELDS + '}}',
+            { s: title }
+        );
+    }
+
+    async function getAniZip(mode, id) {
+        if (!id) return null;
         try {
-            var res = await http_get('https://api.ani.zip/mappings?mal_id=' + malId,
+            var res = await http_get('https://api.ani.zip/mappings?' + mode + '=' + encodeURIComponent(id),
                 { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' });
             var data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
-            return data?.episodes ? data : null;
+            return data?.mappings ? data : null;
         } catch (_) { return null; }
     }
+
+    function getAniZipByMalId(malId) { return getAniZip('mal_id', malId); }
+    function getAniZipByAniListId(id) { return getAniZip('anilist_id', id); }
 
     // ─── getHome ──────────────────────────────────────────────────────────────
 
@@ -364,8 +368,39 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
                 }
             }));
 
+            // The app hero carousel prefers the "Trending" key. Only posters
+            // with an embedded AniList ID can be enriched with an ani.zip logo,
+            // so build that row from those items and leave other rows intact.
+            var trendingCandidates = [], trendingSeen = Object.create(null);
+            ['Completed Anime', 'Movies', 'Ongoing Anime'].forEach(function (key) {
+                var group = (results.find(function (r) { return r.key === key; }) || {}).list || [];
+                group.forEach(function (item) {
+                    var id = extractAniListId(item.posterUrl);
+                    if (!id || trendingSeen[id]) return;
+                    trendingSeen[id] = true;
+                    trendingCandidates.push({ item: item, id: id });
+                });
+            });
+            trendingCandidates = trendingCandidates.slice(0, 7);
+
+            var trending = await Promise.all(trendingCandidates.map(async function (entry) {
+                try {
+                    var zip = await getAniZipByAniListId(entry.id);
+                    return new MultimediaItem({
+                        title:      entry.item.title,
+                        url:        entry.item.url,
+                        posterUrl:  entry.item.posterUrl,
+                        type:       entry.item.type,
+                        status:     entry.item.status,
+                        logoUrl:    pickImage(zip, 'Clearlogo') || undefined,
+                        bannerUrl:  pickImage(zip, 'Banner') || pickImage(zip, 'Fanart') || undefined
+                    });
+                } catch (_) { return entry.item; }
+            }));
+
             var data = {};
             results.forEach(function (r) { if (r.list.length) data[r.key] = r.list; });
+            if (trending.length) data.Trending = trending;
             if (!Object.keys(data).length) return cb(fail('HOME_FETCH_FAILED', 'Gagal memuat homepage Samehadaku.'));
             cb({ success: true, data: data });
         } catch (e) { cb(fail('HOME_FETCH_FAILED', String(e))); }
@@ -404,7 +439,7 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
             var body = getBody(res);
 
             // Episode pages resolve to their parent anime via breadcrumb.
-            if (!/\/anime\//i.test(url) || /episode/i.test(url)) {
+            if (!/\/anime\//i.test(url) || /-episode-\d+|-end\//i.test(url)) {
                 var crumbs = await parse_html(body,
                     '#breadcrumbs a[href*="/anime/"], nav[aria-label="Breadcrumb"] a[href*="/anime/"]', 'href');
                 var detailUrl = null;
@@ -435,6 +470,7 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
 
             var titleTag = (body.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
             var siteTitle = cleanTitle(ogTitleArr[0]?.attr) || cleanTitle(h1Arr[0]?.text) || cleanTitle(titleTag);
+            var sitePoster = fixUrl(ogImageArr[0]?.attr || imageSrcArr[0]?.attr || '');
 
             // Genres: only the block next to .entry-content, before recommendations.
             var metaStart = body.indexOf('entry-content');
@@ -451,9 +487,11 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
             var epSlice = epStart >= 0
                 ? body.slice(epStart, epEnd > epStart ? epEnd : Math.min(body.length, epStart + 200000))
                 : body;
-            var epHrefs = await parse_html(epSlice, 'h4 a[href*="-episode-"]', 'href');
-            if (!epHrefs.length) epHrefs = await parse_html(epSlice, 'a[href*="-episode-"]', 'href');
-            var epNames = await parse_html(epSlice, 'h4 a[href*="-episode-"]', 'text');
+            // Movies often use "<slug>-end/" instead of "<slug>-episode-N/".
+            var EPISODE_LINK = 'a[href*="-episode-"], a[href$="-end/"]';
+            var epHrefs = await parse_html(epSlice, 'h4 ' + EPISODE_LINK, 'href');
+            if (!epHrefs.length) epHrefs = await parse_html(epSlice, EPISODE_LINK, 'href');
+            var epNames = await parse_html(epSlice, 'h4 ' + EPISODE_LINK, 'text');
             var siteDates = [], dm, dRe = /text-\[11px\][^>]*>\s*([^<]+?)\s*<\/span>/gi;
             while ((dm = dRe.exec(epSlice)) !== null) siteDates.push(dm[1].trim());
 
@@ -463,10 +501,18 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
             var yearMatch   = released && released.match(/(\d{4})/);
             var scoreMatch  = body.match(/font-extrabold[^>]*>\s*([\d.]+)\s*<\/span>/i);
 
-            var sitePoster = fixUrl(ogImageArr[0]?.attr || imageSrcArr[0]?.attr || '');
             var siteDesc   = (descArr[0]?.text || '').replace(/\s+/g, ' ').trim();
 
-            var aniListData = await getAniListData(normalizeTitle(siteTitle) || siteTitle);
+            // Prefer the AniList ID embedded in the site poster filename.
+            // Fall back to the Japanese title on the detail page, then the
+            // site title verbatim. Do not strip Cour/Part/Movie anymore.
+            var aniListData = await getAniListById(extractAniListId(sitePoster));
+            if (!aniListData) {
+                var candidates = uniq([detailValue(body, 'Japanese'), siteTitle].filter(Boolean));
+                for (var ci = 0; ci < candidates.length && !aniListData; ci++) {
+                    aniListData = await getAniListByTitle(candidates[ci]);
+                }
+            }
             var aniZip = aniListData?.idMal ? await getAniZipByMalId(aniListData.idMal) : null;
 
             var recommendations = recLinks.map(function (h, i) {
@@ -491,7 +537,7 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
                 if (!href || seenEp[href]) continue;
                 seenEp[href] = true;
                 var numMatch = href.match(/episode-(\d+)/i) || (epNames[i]?.text || '').match(/episode\s*(\d+)/i);
-                var epNum = numMatch ? parseInt(numMatch[1], 10) : (episodes.length + 1);
+                var epNum = numMatch ? parseInt(numMatch[1], 10) : (/-end\//i.test(href) ? 1 : episodes.length + 1);
                 var aniEp = aniZip?.episodes ? (aniZip.episodes[String(epNum)] || aniZip.episodes[epNum] || null) : null;
 
                 var epAirDate = aniEp?.airDateUtc
@@ -519,7 +565,7 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
             cb({
                 success: true,
                 data: new MultimediaItem({
-                    title:           pickTitle(aniZip?.titles) || aniListData?.title || siteTitle,
+                    title:           siteTitle,
                     url:             url,
                     posterUrl:       sitePoster || pickImage(aniZip, 'Poster') || aniListData?.posterUrl || '',
                     logoUrl:         pickImage(aniZip, 'Clearlogo') || undefined,
@@ -548,17 +594,39 @@ import { PixelDrain } from 'skystream-extractors/dist/extractors/pixel_drain.js'
 
     // ─── loadStreams ──────────────────────────────────────────────────────────
 
+    async function collectStreams(body) {
+        var [embedStreams, dlStreams] = await Promise.all([
+            resolveEmbedButtons(body),
+            resolveDownloadLinks(body)
+        ]);
+        return [...(embedStreams || []), ...(dlStreams || [])];
+    }
+
+    async function findEpisodeLink(body) {
+        var links = await parse_html(body, 'a[href*="-episode-"], a[href$="-end/"]', 'href');
+        for (var i = 0; i < links.length; i++) {
+            var href = fixUrl(links[i]?.attr);
+            if (href && !/\/anime\//i.test(href)) return href;
+        }
+        return null;
+    }
+
     async function loadStreams(url, cb) {
         try {
             var res  = await http_get(url, BASE_HEADERS);
             var body = getBody(res);
+            var flat = await collectStreams(body);
 
-            var [embedStreams, dlStreams] = await Promise.all([
-                resolveEmbedButtons(body),
-                resolveDownloadLinks(body)
-            ]);
+            // A detail page has no download links itself. Follow its first
+            // episode/player link so movie playback works from either URL.
+            if (!flat.length) {
+                var episodeUrl = await findEpisodeLink(body);
+                if (episodeUrl && episodeUrl !== url) {
+                    var next = await http_get(episodeUrl, BASE_HEADERS);
+                    flat = await collectStreams(getBody(next));
+                }
+            }
 
-            var flat = [...(embedStreams || []), ...(dlStreams || [])];
             var Q = ['2160p', '1080p', '720p', '480p', '360p'];
 
             flat.sort(function (a, b) {
