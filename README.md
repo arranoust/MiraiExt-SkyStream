@@ -49,13 +49,10 @@ https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/repo.json
 
 | Extension | Region | Content Type |
 | :--- | :--- | :--- |
-| **AniDB** | EN | Anime |
-| **AnimeOnsen** | EN | Anime |
-| **AnimeXin** | EN | Donghua |
-| **Animo** | EN | Anime |
-| **Anizone** | EN | Anime |
+| **AniZone** | EN | Anime |
 | **Idlix** | ID | Movies & Series |
 | **LayarKaca** | ID | Movies & Series |
+| **Moviebox** | ID | Movies & Series |
 | **OtakuDesu** | ID | Anime |
 | **Samehadaku** | ID | Anime |
 | **Torrentio** | Global | Torrents |
