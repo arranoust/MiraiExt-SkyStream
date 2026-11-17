@@ -2,3 +2,6 @@
 opencode.json
 .opencode/
 AGENTS.md
+
+# Node dependencies
+node_modules/

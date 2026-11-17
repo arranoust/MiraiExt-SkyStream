@@ -1,0 +1,12 @@
+{
+  "name": "mirai-ext-skystream",
+  "version": "1.0.0",
+  "description": "SkyStream plugin repository with bundled extractors",
+  "private": true,
+  "scripts": {
+    "deploy": "skystream deploy -u https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main"
+  },
+  "devDependencies": {
+    "skystream-extractors": "1.3.8"
+  }
+}
