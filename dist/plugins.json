@@ -1,22 +1,5 @@
 [
   {
-    "packageName": "com.arranoust.anidb",
-    "name": "AniDB",
-    "version": 3,
-    "baseUrl": "https://anidb.app",
-    "description": "AniDB - Stream thousands of anime series and movies online for free in HD quality",
-    "authors": [
-      "arranoust"
-    ],
-    "languages": [
-      "en"
-    ],
-    "categories": [
-      "Anime"
-    ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.anidb.sky"
-  },
-  {
     "packageName": "com.arranoust.animeonsen",
     "name": "AnimeOnsen",
     "version": 2,
@@ -32,41 +15,6 @@
       "Anime"
     ],
     "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.animeonsen.sky"
-  },
-  {
-    "packageName": "com.arranoust.animexin",
-    "name": "AnimeXin",
-    "version": 2,
-    "baseUrl": "https://animexin.dev",
-    "description": "AnimeXin - Streaming Donghua with Subtitles",
-    "authors": [
-      "arranoust"
-    ],
-    "languages": [
-      "en"
-    ],
-    "categories": [
-      "Anime",
-      "Movies"
-    ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.animexin.sky"
-  },
-  {
-    "packageName": "com.arranoust.animo",
-    "name": "Animo",
-    "version": 3,
-    "baseUrl": "https://4animo.xyz",
-    "description": "Animo - Watch High Quality Anime Online",
-    "authors": [
-      "arranoust"
-    ],
-    "languages": [
-      "en"
-    ],
-    "categories": [
-      "Anime"
-    ],
-    "url": "https://raw.githubusercontent.com/arranoust/MiraiExt-SkyStream/main/dist/com.arranoust.animo.sky"
   },
   {
     "packageName": "com.arranoust.anizone",
